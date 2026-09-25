@@ -26,12 +26,14 @@ func sc3508Thread(base time.Time) []tracker.Comment {
 }
 
 // resetRedriveBackoff clears the package-level pacing state before a test runs.
-// The backoff key is the card key plus the failure's second-granularity
-// timestamp, and every test here builds its thread from time.Now(), so two
-// tests that start inside the same second share a key: without this, a test
-// that leaves a pending next-attempt time (a refusal never clears it) makes the
-// next test's re-drive look not-due and the assertion fail on ordering alone.
-// The sibling pass resets the same way (board_reconcile_failed_test.go).
+// The backoff key is the card key plus the PR's head SHA (SC-3640 round 2 —
+// keying on the failure marker instead let a re-drive that starts but does not
+// merge, which posts its own fresh failure, reset the pacing on every cycle),
+// and every test here shares the stub head "sha1" unless it overrides
+// ShippableProbe: without this reset, a test that leaves a pending next-attempt
+// time (a refusal never clears it) makes the next test's re-drive look not-due
+// and the assertion fail on ordering alone. The sibling pass resets the same
+// way (board_reconcile_failed_test.go).
 func resetRedriveBackoff(t *testing.T) {
 	t.Helper()
 	shippableRedriveBackoff.reset()
@@ -39,16 +41,17 @@ func resetRedriveBackoff(t *testing.T) {
 }
 
 // shippableDeps builds the ReconcileDeps for the shippable re-drive arm alone:
-// a stub ShippableProbe, a RetryDeploy that records every pmKey it was called
-// with, empty live agents (nobody home) and a reachable branch — the neutral
-// case every narrowing test starts from and overrides one field of.
+// a stub ShippableProbe reporting a fixed head SHA, a RetryDeploy that records
+// every pmKey it was called with, empty live agents (nobody home) and a
+// reachable branch — the neutral case every narrowing test starts from and
+// overrides one field of.
 func shippableDeps(shippable bool, probeErr error, redriven *[]string) ReconcileDeps {
 	return ReconcileDeps{
 		MergedProbe: func(context.Context, string) (bool, error) { return false, nil },
 		PostDeployed: func(context.Context, string, string) error {
 			return errors.New("must not post [human:deployed] on an unmerged PR")
 		},
-		ShippableProbe: func(context.Context, string) (bool, error) { return shippable, probeErr },
+		ShippableProbe: func(context.Context, string) (bool, string, error) { return shippable, "sha1", probeErr },
 		RetryDeploy: func(pmKey string) (bool, error) {
 			*redriven = append(*redriven, pmKey)
 			return true, nil
@@ -253,6 +256,67 @@ func TestReconcileShippedFailures_RedriveBacksOffOnARefusal(t *testing.T) {
 	n = reconcileShippedFailures(context.Background(), ownWork(cardWithThread(thread)), deps, now.Add(30*time.Second))
 	assert.Equal(t, 0, n)
 	assert.Equal(t, 1, calls, "the backoff must not let a refusal be retried on the very next tick")
+}
+
+// SC-3640 round 2: a re-drive that STARTS but does not merge posts its own
+// fresh [human:deploy-failed] — that is the normal shape of "still not
+// shippable enough to actually land" — and pacing on that marker's timestamp
+// (the original shape) built a brand new backoff key every cycle, so the
+// pass re-drove on every tick forever rather than backing off. Simulates 40
+// such cycles, each appending a fresh deploy-failed on the SAME PR head more
+// than FailedRecoveryGrace before the next check, and asserts the re-drive
+// count is bounded by the backoff schedule rather than growing with the tick
+// count.
+func TestReconcileShippedFailures_RedriveBacksOffAcrossRepeatedFailuresOnTheSameHead(t *testing.T) {
+	resetRedriveBackoff(t)
+	base := time.Now().Add(-time.Hour)
+	thread := sc3508Thread(base)
+	var calls int
+	deps := shippableDeps(true, nil, &[]string{})
+	deps.RetryDeploy = func(string) (bool, error) { calls++; return true, nil }
+
+	now := base.Add(30 * time.Minute)
+	const cycles = 40
+	for i := 0; i < cycles; i++ {
+		thread = append(thread, cmt(
+			"[human:deploy-failed]\nCI checks failed on the pull request (failing: frontend-test) — fix the failing checks, then re-run Deploy\npr: https://github.com/o/r/pull/408",
+			now))
+		now = now.Add(6 * time.Minute) // past FailedRecoveryGrace before the next check
+		reconcileShippedFailures(context.Background(), ownWork(cardWithThread(thread)), deps, now)
+	}
+
+	assert.Less(t, calls, cycles/2,
+		"the backoff on a stable head must bound re-drives well under one per cycle over 4 simulated hours")
+}
+
+// SC-3640 round 2: a head that has genuinely moved — the PR got a new commit —
+// is new evidence and earns a fresh attempt even while the PREVIOUS head's
+// backoff has not elapsed; only a head that has NOT moved is paced.
+func TestReconcileShippedFailures_NewHeadGetsAFreshAttempt(t *testing.T) {
+	resetRedriveBackoff(t)
+	base := time.Now().Add(-time.Hour)
+	thread := sc3508Thread(base)
+	var heads []string
+	head := "aaa111"
+	deps := shippableDeps(true, nil, &[]string{})
+	deps.ShippableProbe = func(context.Context, string) (bool, string, error) { return true, head, nil }
+	deps.RetryDeploy = func(string) (bool, error) { heads = append(heads, head); return true, nil }
+
+	now := base.Add(30 * time.Minute)
+	n := reconcileShippedFailures(context.Background(), ownWork(cardWithThread(thread)), deps, now)
+	assert.Equal(t, 1, n)
+
+	// Same head, moments later: the backoff blocks it.
+	n = reconcileShippedFailures(context.Background(), ownWork(cardWithThread(thread)), deps, now.Add(30*time.Second))
+	assert.Equal(t, 0, n)
+	assert.Equal(t, []string{"aaa111"}, heads)
+
+	// The PR gets a new commit: the head moves, and the re-drive fires even
+	// though "aaa111"'s backoff has not elapsed.
+	head = "bbb222"
+	n = reconcileShippedFailures(context.Background(), ownWork(cardWithThread(thread)), deps, now.Add(31*time.Second))
+	assert.Equal(t, 1, n, "a head that has genuinely moved is not paced by the previous head's backoff")
+	assert.Equal(t, []string{"aaa111", "bbb222"}, heads)
 }
 
 // A merged PR still clears with the old, merged-only behaviour when the

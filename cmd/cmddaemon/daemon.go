@@ -933,7 +933,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	// re-driven rather than left for a person to click. One ReadPullRequest
 	// answers both halves of "definitely shippable", and an unreadable answer is
 	// an error, never a false — the pass must leave such a card alone.
-	prShippable := func(probeCtx context.Context, prURL string) (bool, error) {
+	prShippable := func(probeCtx context.Context, prURL string) (bool, string, error) {
 		return boardPRShippable(probeCtx, ds.srv.Projects, ds.vaultResolver, prURL)
 	}
 	// The re-drive is the SAME transition the board's "Retry deploy" gesture
@@ -3705,33 +3705,36 @@ func boardPRMerged(ctx context.Context, projects *daemon.ProjectRegistry, resolv
 // boardPRShippable reports whether the PR at prURL is definitely ready to ship
 // on the workspace's forge: mergeable, with every check it reports passing. A
 // forge that cannot read the state, or a URL with no parseable number, returns
-// (false, err) so the reconcile pass leaves the card untouched rather than
+// (false, "", err) so the reconcile pass leaves the card untouched rather than
 // re-driving a deploy on an unknown state (SC-3640; the SC-910 rule, widened).
-func boardPRShippable(ctx context.Context, projects *daemon.ProjectRegistry, resolver *vault.Resolver, prURL string) (bool, error) {
+// The head SHA travels alongside the verdict so the reconcile pass can pace
+// re-drives on the head rather than on whichever failure prompted the check
+// (SC-3640 round 2) — the number the ReadPullRequest call already answers.
+func boardPRShippable(ctx context.Context, projects *daemon.ProjectRegistry, resolver *vault.Resolver, prURL string) (shippable bool, headSHA string, err error) {
 	entry, err := projects.SoleEntry()
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	number, ok := forge.PullRequestNumberFromURL(prURL)
 	if !ok {
-		return false, errors.WithDetails("could not parse pull request number", "pr", prURL)
+		return false, "", errors.WithDetails("could not parse pull request number", "pr", prURL)
 	}
 	creator, repo, err := resolveForge(entry.Dir, entry.EnvLookup(), resolver)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	reader, ok := creator.(forge.PullRequestReader)
 	if !ok {
-		return false, errors.WithDetails("forge does not support reading pull request state", "repo", repo)
+		return false, "", errors.WithDetails("forge does not support reading pull request state", "repo", repo)
 	}
 	state, err := reader.ReadPullRequest(ctx, repo, number)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	if state == nil {
-		return false, errors.WithDetails("the forge returned no pull request state", "pr", prURL)
+		return false, "", errors.WithDetails("the forge returned no pull request state", "pr", prURL)
 	}
-	return daemon.PullRequestShippable(state), nil
+	return daemon.PullRequestShippable(state), state.HeadSHA, nil
 }
 
 // errNoPMTracker is the one answer every PM resolver gives when the set does not

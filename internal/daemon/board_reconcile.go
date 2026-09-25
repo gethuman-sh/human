@@ -103,7 +103,13 @@ type DeployedPoster func(ctx context.Context, pmKey, prURL string) error
 // must leave the card exactly as it is: a recovery that fires on an unknown
 // state is the failure the !merged rule has always guarded against (SC-3640).
 // A nil probe disables the shippable arm ("nil disables").
-type PRShippableProbe func(ctx context.Context, prURL string) (bool, error)
+//
+// headSHA is the PR's current head commit, returned alongside the verdict so a
+// caller can pace re-drives on the head rather than on the failure that
+// prompted the check: the head is what "the pull request turned green" is
+// actually about, and it is the one signal that does not rotate merely because
+// a re-drive that started ended in another failure (SC-3640 round 2).
+type PRShippableProbe func(ctx context.Context, prURL string) (shippable bool, headSHA string, err error)
 
 // DeployRedrive re-drives the done stage for a card whose deploy failed — the
 // same in-place retry transition the board's "Retry deploy" gesture issues, so
@@ -1047,13 +1053,22 @@ func stuckRunningReason(stage BoardStage) string {
 	return "Stuck in " + string(stage) + ": no terminal marker and no live agent — needs attention"
 }
 
-// shippableRedriveBackoff spaces the re-drive attempts on ONE deploy failure.
-// The arm has no upper time bound on purpose — a card red overnight with a
-// green PR is exactly what it exists to clear — so the pacing is what keeps a
-// re-drive that starts nothing (a launch error, a forge that keeps reporting
-// mergeable while refusing the merge) to a handful of tries per failure rather
-// than one per tick. In memory like its sibling: the thread is the durable
-// state, this is only pacing.
+// shippableRedriveBackoff spaces the re-drive attempts on ONE pull request
+// HEAD. The arm has no upper time bound on purpose — a card red overnight with
+// a green PR is exactly what it exists to clear — so the pacing is what keeps
+// a re-drive that starts nothing, or that starts and ends in another failure
+// on the SAME head, to a handful of tries per head rather than one per tick.
+// Keyed on the head rather than on the failure that prompted the check: a
+// re-drive that starts always posts a fresh [human:deploy-failed] if it does
+// not merge, and a key built from that marker's timestamp (the original
+// SC-3640 shape) therefore never repeats and the backoff never engages — see
+// redriveShippableDeploy for the head-keyed replacement and the launched path,
+// which for the same reason must never clear this entry: "launched" answers
+// only whether the re-drive's goroutine started (runDoneStage returns before
+// openDraftPRAndReview's outcome is known), not whether it succeeded, so
+// treating it as success and clearing the entry reproduces the same hole one
+// call later. In memory like its sibling: the thread is the durable state,
+// this is only pacing.
 var shippableRedriveBackoff = newRecoveryBackoff(2*time.Minute, 30*time.Minute)
 
 // reconcileShippedFailures clears the 695-class stale red two ways: a done-stage
@@ -1140,7 +1155,7 @@ func redriveShippableDeploy(ctx context.Context, card ReconcileCard, derived Boa
 	if !ok {
 		return false
 	}
-	shippable, err := deps.ShippableProbe(ctx, derived.PRURL)
+	shippable, headSHA, err := deps.ShippableProbe(ctx, derived.PRURL)
 	if err != nil {
 		logger.Warn().Err(err).Str("pm", card.Key).Str("pr", derived.PRURL).
 			Msg("board reconcile: cannot probe whether the PR is shippable, leaving card as-is")
@@ -1149,7 +1164,13 @@ func redriveShippableDeploy(ctx context.Context, card ReconcileCard, derived Boa
 	if !shippable {
 		return false
 	}
-	key := card.Key + "/deploy-redrive/" + deployFailureStamp(card.Comments)
+	// Keyed on the head, not on the failure marker: a re-drive that starts but
+	// does not merge posts its own fresh [human:deploy-failed], and pacing on
+	// THAT would reset every single cycle (SC-3640 round 2). A head that has
+	// not moved since the last attempt cannot produce a different outcome; one
+	// that has is genuinely new evidence and earns a fresh attempt even if the
+	// previous head's backoff has not elapsed.
+	key := card.Key + "/deploy-redrive/" + headSHA
 	if !shippableRedriveBackoff.due(key, now) {
 		return false
 	}
@@ -1165,8 +1186,21 @@ func redriveShippableDeploy(ctx context.Context, card ReconcileCard, derived Boa
 		// keeps the next try off the tick.
 		return false
 	}
-	shippableRedriveBackoff.clear(key)
-	logger.Info().Str("pm", card.Key).Str("pr", derived.PRURL).Str("branch", branch).
+	// No clear() here on purpose: launched reports only that the re-drive's
+	// goroutine started (runDoneStage returns before openDraftPRAndReview's
+	// result is known), never that it shipped or even registered as live.
+	// Clearing on launch discarded the wait this call just recorded on every
+	// single re-drive, which is exactly how the backoff paced nothing (SC-3640
+	// round 2) — measured concretely for the case that matters: the launched
+	// work dies before ever posting a marker or a live agent, so
+	// deployRedriveEligible's liveStageAgent/DeployRun checks above see nothing
+	// and let the next tick straight through to this function again, leaving
+	// the backoff as the only thing standing between that and a re-drive per
+	// tick forever. Once the re-drive DOES register — a live agent, a running
+	// DeployRun, or a moved head — deployRedriveEligible or the head check
+	// above returns before this key is even consulted, so the stale entry left
+	// here is inert rather than load-bearing.
+	logger.Info().Str("pm", card.Key).Str("pr", derived.PRURL).Str("branch", branch).Str("head", headSHA).
 		Msg("board reconcile: the failed deploy's PR is mergeable with every check green; re-drove the deploy")
 	return true
 }
@@ -1212,14 +1246,6 @@ func deployRedriveEligible(card ReconcileCard, derived BoardCard, deps Reconcile
 		return "", false
 	}
 	return branch, true
-}
-
-// deployFailureStamp identifies WHICH failure a re-drive is pacing, so a new
-// deploy-failed marker gets a fresh attempt instead of inheriting the previous
-// failure's backoff.
-func deployFailureStamp(comments []tracker.Comment) string {
-	_, failed := latestStateInStage(comments, BoardDoneStage)
-	return failed.Created.UTC().Format(time.RFC3339)
 }
 
 // reconcileOrphanedHandoffs launches the missed review for every card whose
