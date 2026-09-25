@@ -1489,10 +1489,29 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, ou
 // exit event behind it (outcome.Agent empty) asks: the hook path's drive is
 // the step's own ending and needs no probe. A step with no record whose agent
 // is alive is work in progress, not a finished step the loop cannot read.
+//
+// Two questions, because the done stage runs three agents and only two of them
+// are loop steps. The second is the deploy fixer's, and it deliberately sits
+// OUTSIDE loopHalfStillRunning's stepRecorded short-circuit: the merge that
+// dispatched the fixer runs inside the approved review's own drive, so the
+// newest loop marker still names that review and its recorded approval would
+// otherwise send this re-drive straight back to PRActionMerge, against the
+// branch the fixer is mid-rebase on (SC-5591).
 func (d BoardTransitionDeps) loopStepStillRunning(pmKey string, comments []tracker.Comment, outcome PRLoopOutcome) bool {
 	if d.LoopStepAlive == nil || outcome.Agent != "" {
 		return false
 	}
+	if d.loopHalfStillRunning(pmKey, comments, outcome) {
+		return true
+	}
+	return d.LoopStepAlive(agentNameFor(pmKey, deployFixAgentStage))
+}
+
+// loopHalfStillRunning answers the question for the loop's own two steps: the
+// step the fresh thread names has no record of its own and its agent is alive.
+// The caller has already established that d.LoopStepAlive is wired and that this
+// drive carries no exit event.
+func (d BoardTransitionDeps) loopHalfStillRunning(pmKey string, comments []tracker.Comment, outcome PRLoopOutcome) bool {
 	stage := LatestPRLoopStage(comments)
 	// A record from a PRIOR round still satisfies stepRecorded — those keys are
 	// never cleared between rounds — so a recorded-but-stale outcome must be

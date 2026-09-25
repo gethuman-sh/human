@@ -142,3 +142,29 @@ func TestReconcileOutage_SkipsWhileTheDeployFixerIsAlive(t *testing.T) {
 	assert.Zero(t, redriven)
 	assert.Empty(t, relaunched, "a live deploy fixer must not be relaunched on top of")
 }
+
+// SC-5591: reconcilePRLoops was the one done-stage pass SC-5396 did not convert.
+// A deploy fixer dispatched from the merge posts no loop marker of its own — and
+// when the tracker refuses its deploy-fix-started post, the thread stays frozen
+// at pr-review-started — so the card still reads "loop mid-flight" while
+// board-<key>-deployfix works. Asking only about the two loop halves re-drove it
+// every tick: the second drive re-ran the merge against the branch the fixer was
+// rebasing and posted deploy-failed a minute before it finished.
+func TestReconcilePRLoop_SkipsWhileTheDeployFixerIsAlive(t *testing.T) {
+	cards := []ReconcileCard{{
+		Key: "SC-1",
+		Comments: []tracker.Comment{
+			cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+			cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), time.Unix(2, 0)),
+		},
+	}}
+	var driven []string
+	drive := func(pmKey string) error { driven = append(driven, pmKey); return nil }
+	live := liveAgents(agentNameFor("SC-1", deployFixAgentStage))
+
+	n := reconcilePRLoops(context.Background(), reviewSet(cards, alwaysReachable),
+		ReconcileDeps{LiveAgents: live, DriveLoop: drive})
+
+	assert.Equal(t, 0, n, "a live deploy fixer owns the card exactly as a reviewer or PR fixer does")
+	assert.Empty(t, driven, "re-driving would race a second merge onto the branch the fixer is rewriting")
+}
