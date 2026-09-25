@@ -5240,17 +5240,22 @@ func startSleepInhibitor(ctx context.Context, out io.Writer, logger zerolog.Logg
 // identically at thirty seconds, at fourteen hours, and when the agent behind it
 // has been dead since the previous afternoon.
 //
-// Only running cards are read: a finished card's last phase is history, and
-// showing it would suggest work still in flight. A store that will not open, or
-// a scope with nothing recorded, leaves the card exactly as it was — the badge
-// degrades to today's behaviour rather than inventing a phase.
+// A card whose run ENDED keeps its phase too, and the tense is the renderer's
+// job rather than a reason to withhold the fact. A reaped or crashed stage
+// writes no blocker record, so without this the only answer to "where did it get
+// to" is one an orderly stop happened to leave behind. The badge renders an
+// ended card's phase past-tense, with no spinner and no age (badgeInfo). A
+// paused (outage) card is deliberately excluded: it has not ended, it is waiting.
+// A store that will not open, or a scope with nothing recorded, leaves the card
+// exactly as it was — the badge degrades to today's behaviour rather than
+// inventing a phase.
 func attachActivity(ctx context.Context, reg *daemon.ProjectRegistry, view *daemon.BoardView, logger zerolog.Logger) {
 	if view == nil || len(view.Cards) == 0 {
 		return
 	}
 	err := withStateStore(func(store agentstate.Store) error {
 		for i, card := range view.Cards {
-			if card.State != string(daemon.BoardRunning) {
+			if !activityShown(card.State) {
 				continue
 			}
 			entries, err := store.List(ctx, boardStateProject(reg, card.Key), card.Key, board.StagePrefix)
@@ -5270,6 +5275,19 @@ func attachActivity(ctx context.Context, reg *daemon.ProjectRegistry, view *daem
 		// The phase is an enrichment, never a gate: a board that cannot read the
 		// state store still renders every card it fetched.
 		logger.Debug().Err(err).Msg("board view: could not read phase records; cards render without them")
+	}
+}
+
+// activityShown names the card states whose recorded phase the board renders:
+// the run is working, or it has ended and the phase is how far it got. Every
+// other state (idle, queued, done, outage) has no phase to show or no run to
+// show it for.
+func activityShown(state string) bool {
+	switch daemon.BoardState(state) {
+	case daemon.BoardRunning, daemon.BoardFailed, daemon.BoardResolved:
+		return true
+	default:
+		return false
 	}
 }
 
