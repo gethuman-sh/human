@@ -840,8 +840,9 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	// and hand it to the loop executor, which decides the next step.
 	advancePRLoop := advancePRLoopFunc(ctx, ds, diagnoseFailure, reviewLaunchGate, openFindingsRecord(logger), logger)
 	// The deploy-fixer (SC-1557) is driven off its Stop event exactly like the PR
-	// loop: on exit read the exit it recorded in stage.deploy-fix and hand it to
-	// AdvanceDeployFix, which re-runs Deploy on `done` or reds the card otherwise.
+	// loop: on exit read the report it recorded in stage.deploy-fix and hand it to
+	// AdvanceDeployFix, which re-runs Deploy on `done`, parks the card on an
+	// outage, or reds it otherwise (SC-5592).
 	advanceDeployFix := advanceDeployFixFunc(ctx, ds, reviewLaunchGate, logger)
 	// A daemon only chains a review for a handoff branch it can resolve on its
 	// own machine — a board-context fix leaves its branch local on the machine
@@ -4023,8 +4024,9 @@ func openFindingsRecord(logger zerolog.Logger) recall.FindingsRecorder {
 }
 
 // advanceDeployFixFunc builds the deploy-fixer's Stop-event driver: on the fixer's
-// exit it reads the exit recorded in stage.deploy-fix and hands it to the deploy-fix
-// executor, which re-runs Deploy on `done` or reds the card on anything else.
+// exit it reads the report recorded in stage.deploy-fix and hands it to the
+// deploy-fix executor, which re-runs Deploy on `done`, parks the card on an
+// outage, or reds it on anything else.
 func advanceDeployFixFunc(ctx context.Context, ds *daemonState, launchGate func(context.Context) []daemon.DoctorCheck, logger zerolog.Logger) func(pmKey string) error {
 	return func(pmKey string) error {
 		deps, err := boardTransitionDepsFor(ds.srv.Projects, pmKey, ds.vaultResolver, ds.daemonID, logger, launchGate, ipWiringFrom(ds))
@@ -4035,8 +4037,8 @@ func advanceDeployFixFunc(ctx context.Context, ds *daemonState, launchGate func(
 		if comments, cerr := deps.Commenter.ListComments(ctx, pmKey); cerr == nil {
 			anchor, _ = daemon.LatestMarkerTime(comments, daemon.DeployFixStartedHeader)
 		}
-		exit, blocker := readDeployFixExit(ctx, boardStateProject(ds.srv.Projects, pmKey), pmKey, anchor, logger)
-		return deps.AdvanceDeployFix(ctx, pmKey, exit, blocker)
+		report := readDeployFixReport(ctx, boardStateProject(ds.srv.Projects, pmKey), pmKey, anchor, logger)
+		return deps.AdvanceDeployFix(ctx, pmKey, report)
 	}
 }
 

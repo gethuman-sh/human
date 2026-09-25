@@ -237,7 +237,7 @@ func TestAdvanceDeployFix_escalationOntoAnAlreadyFailedDoneStagePostsNothing(t *
 	)}
 	deps := newDeps(c, &fakeLauncher{}, &fakeDeployer{})
 
-	err := deps.AdvanceDeployFix(context.Background(), "SC-1", ExitNeedsInput, Blocker{})
+	err := deps.AdvanceDeployFix(context.Background(), "SC-1", DeployFixReport{Exit: ExitNeedsInput})
 	require.NoError(t, err)
 
 	assert.Empty(t, c.added, "the done stage already failed with no relaunch since — nothing more is posted")

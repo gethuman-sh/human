@@ -354,7 +354,7 @@
         "daemon"
       ],
       "inherits": "done",
-      "note": "Rounds are separately bounded by DefaultDeployFixRounds (2); past that the escalation names the condition that is blocking rather than advising a retry that would hit the same wall. Its agent is board-<key>-deployfix and the 15-minute grace applies to it: the deploy engine's own 60-minute clock does not cover a running fixer, because DeployBranch unregisters its run (deployRunFinished) as soon as it dispatches one. What spares a working fixer is the liveness join, not the grace. The same join spares it from the PR-loop re-drive: where the fixer's own deploy-fix-started post was refused, the thread stays frozen at the loop's marker and the card still reads mid-loop, so reconcilePRLoops asks all three done-stage names rather than the two halves (SC-5591)."
+      "note": "Rounds are separately bounded by DefaultDeployFixRounds (2); past that the escalation names the condition that is blocking rather than advising a retry that would hit the same wall. Its agent is board-<key>-deployfix and the 15-minute grace applies to it: the deploy engine's own 60-minute clock does not cover a running fixer, because DeployBranch unregisters its run (deployRunFinished) as soon as it dispatches one. What spares a working fixer is the liveness join, not the grace. The same join spares it from the PR-loop re-drive: where the fixer's own deploy-fix-started post was refused, the thread stays frozen at the loop's marker and the card still reads mid-loop, so reconcilePRLoops asks all three done-stage names rather than the two halves (SC-5591). A round that ends in an outage is not charged: deployFixRounds refunds a deploy-fix-started marker followed by a deploy-outage one, so the bound counts fixer rounds that actually ran (SC-5592)."
     },
     {
       "name": "merged",
@@ -1034,13 +1034,14 @@
         "implementing",
         "in-review",
         "deploying",
-        "ci-gate"
+        "ci-gate",
+        "deploy-fixing"
       ],
       "dst": "substrate-down",
       "actor": "daemon",
       "marker": "[human:planning-outage] | [human:implementation-outage] | [human:review-outage] | [human:deploy-outage]",
-      "where": "board_retry.go ExitOutage",
-      "doc": "One marker per stage. It costs no retry budget and the reconcile pass relaunches it each interval until the substrate returns."
+      "where": "board_retry.go ExitOutage for the four board stages; internal/daemon/board_transition.go AdvanceDeployFix → deployFixOutage for the deploy-fix step, whose exit driveDeployFixExit claims before the generic outage gate can see it (SC-5592)",
+      "doc": "One marker per stage. It costs no retry budget and the reconcile pass relaunches it each interval until the substrate returns. The deploy-fix step reaches it only from deploy-fixing: the post sits under the stageAlreadyFailed guard, so a done stage another actor already redded stays red rather than flipping back to waiting. The round it spent is given back — deployFixRounds discards a deploy-fix-started marker that a deploy-outage marker follows — so a persisting outage cannot exhaust the 2-round budget on rounds that attempted nothing."
     },
     {
       "name": "launch-refused-no-plan",
@@ -1229,7 +1230,7 @@
       "actor": "daemon",
       "marker": "[human:pr-review-started]",
       "where": "internal/daemon/board_transition.go isDeployRetry — an outage card at the Done stage is relaunched in place exactly like a failed one, so the reconcile backoff can re-drive it (SC-2307)",
-      "doc": "The same re-entry as start-pr-review, made by the machine rather than by a person: an infrastructure failure is not the ticket's fault, so nobody should have to drag the card back. Split from start-pr-review because the actor differs, and a state's who_may_act is checked against the transitions that leave it."
+      "doc": "The same re-entry as start-pr-review, made by the machine rather than by a person: an infrastructure failure is not the ticket's fault, so nobody should have to drag the card back. Split from start-pr-review because the actor differs, and a state's who_may_act is checked against the transitions that leave it. It is also the way back for a deploy-FIX round that hit an outage: the re-drive re-enters the whole done stage, and the fixer round it may re-dispatch is uncharged."
     },
     {
       "name": "gate-verdict-in-planning",
