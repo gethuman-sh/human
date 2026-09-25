@@ -339,13 +339,46 @@ func parseAgentName(name string) (pmKey string, stage BoardStage, ok bool) {
 	return key, BoardStage(s), ok
 }
 
+// transitionOrigin says WHO asked for a transition: the board's gesture route or
+// the daemon's own relaunch. It is a parameter of the private applyTransition
+// rather than a field on BoardTransitionRequest, and that is the whole point of
+// it (AD2): the request is decoded off the wire, so a field there would let any
+// client claim a person's provenance and mint itself the fix rounds the machine
+// is not allowed to mint for itself.
+//
+// Cause alone cannot answer this. The durable re-drive and the stage retry both
+// send an EMPTY Cause (cmd/cmddaemon/daemon.go, the redriveDeploy request), so
+// on Cause alone every automatic re-drive of a red deploy would look exactly
+// like a person clicking Retry and would re-arm a round on a timer.
+type transitionOrigin int
+
+const (
+	// originHuman is ApplyTransition: the board's drag and context-menu gestures,
+	// and the daemon closures that drive the same entry with a Cause set.
+	originHuman transitionOrigin = iota
+	// originMachine is ApplyRetryTransition: the daemon relaunching a stage for
+	// itself (board_retry.go's StageRetry, reconcileShippedFailures' re-drive).
+	// It grants nothing, ever.
+	originMachine
+)
+
+// humanDeployRetry reports the one shape that earns a fresh deploy-fix round: a
+// person's Retry deploy. Both halves are required. origin rules out the machine's
+// own relaunch; the empty Cause rules out the machine-driven moves that enter by
+// the human door — the build→review chain and the poll-boundary recovery each
+// carry one, which is the same discriminator ApplyTransition already relies on at
+// its ErrClaimLost fork below.
+func humanDeployRetry(origin transitionOrigin, cause WaitCause) bool {
+	return origin == originHuman && cause == ""
+}
+
 // ApplyTransition advances a card from its current stage to the requested next
 // stage. The daemon re-loads live comments and re-derives the card here because
 // the UI gate is advisory only — the daemon is the authority on whether a
 // forward move is allowed (forward-only, single-step, gated on the prior
 // stage's completion). All errors carry details for the client.
 func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTransitionRequest) error {
-	_, err := d.applyTransition(ctx, req)
+	_, err := d.applyTransition(ctx, req, originHuman)
 	// A machine-driven move carries a Cause (the build→review chain, a
 	// poll-boundary recovery); a person's drag does not. The machine keeps the
 	// old silence on a lost claim — the winner starts the stage and nothing is
@@ -361,7 +394,7 @@ func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTrans
 // whether a launch actually happened, so the retry accounting never charges an
 // attempt for a refusal that started nothing (SC-2989).
 func (d BoardTransitionDeps) ApplyRetryTransition(ctx context.Context, req BoardTransitionRequest) (launched bool, err error) {
-	launched, err = d.applyTransition(ctx, req)
+	launched, err = d.applyTransition(ctx, req, originMachine)
 	if stderrors.Is(err, ErrClaimLost) {
 		// Nothing started and nothing failed: another daemon has the stage. Reported
 		// as a refusal so the attempt is refunded rather than charged to a launch
@@ -376,7 +409,7 @@ func (d BoardTransitionDeps) ApplyRetryTransition(ctx context.Context, req Board
 // tell a genuine relaunch from a refusal that started nothing (SC-2989); the
 // error-only ApplyTransition wrapper discards launched for every drag/gesture/
 // chain caller that only cares whether the move was accepted.
-func (d BoardTransitionDeps) applyTransition(ctx context.Context, req BoardTransitionRequest) (launched bool, err error) {
+func (d BoardTransitionDeps) applyTransition(ctx context.Context, req BoardTransitionRequest, origin transitionOrigin) (launched bool, err error) {
 	// Ideas never move via board transitions: promotion out of the Ideas
 	// column is a label edit, performed by the idea-promote route the desktop
 	// calls instead of this one.
@@ -415,7 +448,7 @@ func (d BoardTransitionDeps) applyTransition(ctx context.Context, req BoardTrans
 	// stage retries — are dispatched before the forward-only rule, which would
 	// otherwise reject each as a non-advance. Extracted so applyTransition reads
 	// as guards → sanctioned-non-forward → forward, one concern per block.
-	if handled, launched, err := d.dispatchNonForwardMove(ctx, req, card, comments); handled {
+	if handled, launched, err := d.dispatchNonForwardMove(ctx, req, card, comments, origin); handled {
 		return launched, err
 	}
 
@@ -450,7 +483,7 @@ func (d BoardTransitionDeps) applyTransition(ctx context.Context, req BoardTrans
 // as a non-advance, so they are resolved here first. handled reports whether the
 // request matched one of them — when false, ApplyTransition falls through to the
 // forward-only path — and err carries that dispatch's own result.
-func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req BoardTransitionRequest, card BoardCard, comments []tracker.Comment) (handled bool, launched bool, err error) {
+func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req BoardTransitionRequest, card BoardCard, comments []tracker.Comment, origin transitionOrigin) (handled bool, launched bool, err error) {
 	switch {
 	// Queued launch: a decision was answered and the stage it named has not
 	// started. The card derives to (that stage, queued) — a state none of the
@@ -547,7 +580,17 @@ func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req Boa
 	// branch and re-attempts the merge. Without this the forward-only rule rejects
 	// the same-stage move and a conflicted deploy is a dead end that can only be
 	// escaped by re-implementing already-reviewed work (735).
+	//
+	// A PERSON'S retry additionally re-arms one automated fix round. Without it
+	// the gesture was a dead end of its own once the ticket's two rounds were
+	// spent: the retry found the same conflict, dispatched nobody, and reposted
+	// the identical failure — the one move the board offers reproducing its own
+	// failure (SC-5595). The grant is posted BEFORE the stage starts, because the
+	// fixer gate reads the thread again from inside the run it is about to start.
 	case isDeployRetry(req.To, card):
+		if humanDeployRetry(origin, req.Cause) {
+			d.grantDeployFixRound(ctx, req.PMKey)
+		}
 		err := d.runDoneStage(ctx, req, card, comments)
 		return true, err == nil, err
 	}
@@ -1182,6 +1225,26 @@ const DeployFixBeforeReviewField = "before"
 // the signal, the value says what it preceded.
 const deployFixBeforeReviewValue = "review"
 
+// DeployFixGrantField marks a deploy-fix-started marker whose round was funded
+// by a person's Retry deploy rather than by the ticket's own budget. It follows
+// DeployFixBeforeReviewField exactly — optional, appended to the field order
+// only when set, read back by name — so the marker stays a name-addressed record
+// and no reader acquires a dependency on where the line sits (SC-5595).
+const DeployFixGrantField = "grant"
+
+// deployFixGrantValue is the field's one value; the field's presence is the
+// signal, the value says what funded the round.
+const deployFixGrantValue = "retry"
+
+// deployFixIsGrantFunded reports whether one deploy-fix-started BODY records a
+// grant-funded round. It takes the body rather than the thread because
+// deployFixGrants must ask it of each marker in turn, not only of the newest —
+// which is what separates it from deployFixWasBeforeReview below.
+func deployFixIsGrantFunded(body string) bool {
+	m, parsed := marker.ParseBody(body)
+	return parsed && m.Fields[DeployFixGrantField] == deployFixGrantValue
+}
+
 // launchPRReview is the one way a review round starts. Before the reviewer is
 // launched the branch is brought current with the base, so what the reviewer
 // reads is the integrated candidate — the thing that will merge — rather than
@@ -1335,6 +1398,73 @@ func deployFixRounds(comments []tracker.Comment) int {
 		}
 	}
 	return n
+}
+
+// deployFixGrants counts the re-armed deploy-fix rounds standing UNSPENT on the
+// ticket: one per [human:deploy-retry] marker a person's Retry deploy minted,
+// minus each one a deploy-fix-started marker carrying `grant: retry` has since
+// spent, plus one back where that grant-funded round ended in an outage — the
+// same refund deployFixRounds makes for a charged round, for the same reason
+// (SC-5592): an outage attempted nothing, so it must not consume the one round
+// a person asked for.
+//
+// A separate counter rather than a term inside deployFixRounds, deliberately.
+// deployFixRounds answers "how many rounds ran", which is what the card's
+// sentence reports and what the bound is stated in; this answers "may another
+// one start". Folding them would make the reported count lie by the number of
+// grants (AD4).
+//
+// Chronological with a pending flag, the same walk as deployFixRounds: only an
+// outage FOLLOWING a grant-funded started marker refunds, so a stray or
+// repeated outage marker can never mint a grant nobody asked for.
+func deployFixGrants(comments []tracker.Comment) int {
+	sorted := make([]tracker.Comment, len(comments))
+	copy(sorted, comments)
+	sort.SliceStable(sorted, func(i, j int) bool { return commentNewer(sorted[j], sorted[i]) })
+
+	n, spent := 0, false
+	for _, c := range sorted {
+		trimmed := strings.TrimSpace(c.Body)
+		switch {
+		case strings.HasPrefix(trimmed, DeployRetryHeader):
+			n++
+		case strings.HasPrefix(trimmed, DeployFixStartedHeader):
+			// A round the ticket's own budget funded leaves the grant alone: the
+			// grant is spent by the round it PAID for, never by a round that ran
+			// while the budget still had room.
+			if deployFixIsGrantFunded(trimmed) && n > 0 {
+				n--
+				spent = true
+			} else {
+				spent = false
+			}
+		case strings.HasPrefix(trimmed, DeployOutageHeader):
+			if spent {
+				n++
+				spent = false
+			}
+		}
+	}
+	return n
+}
+
+// deployRetryGrantBody is a FIXED sentence. Nothing reads anything out of this
+// marker but its header, and interpolating a key, a count or a time would make
+// the body a format with readers it does not have — the stored-format dependency
+// this plan's Dependents section exists to keep from being created by accident.
+const deployRetryGrantBody = "a person re-ran Deploy on this card — one further automated fix round is granted for it."
+
+// grantDeployFixRound records the re-armed round. Best-effort on purpose: a
+// tracker that refuses the comment must not refuse the retry, because the retry
+// is worth running without the grant — the freshness rebase may be all it needed.
+func (d BoardTransitionDeps) grantDeployFixRound(ctx context.Context, pmKey string) {
+	if err := postMarker(ctx, d.Commenter, pmKey, marker.Marker{
+		Type: MarkerDeployRetry,
+		Body: deployRetryGrantBody,
+	}); err != nil {
+		d.Logger.Warn().Err(err).Str("pm", pmKey).
+			Msg("board deploy retry: could not record the re-armed fix round; the retry proceeds on the spent budget")
+	}
 }
 
 // launchPRLoopAgent launches one loop step's agent (fire-and-forget, no claim:
@@ -2412,6 +2542,27 @@ func deployRoundsSentence(rounds int) string {
 	}
 }
 
+// deployBudgetSpentSentence tells a person what the one gesture the board offers
+// will actually DO. With the budget spent, Retry deploy is no longer a repeat of
+// the failure just read: it re-arms a single fixer round. Without this sentence
+// the card was byte-identical across every retry, so the move that would help
+// looked exactly like the move that had just failed (SC-5595).
+//
+// It names the BOARD's Retry deploy specifically. `human deploy <KEY>` grants
+// nothing — the fix skills run that command from inside their own runs, and a
+// re-arm there would be the machine funding itself (AD7) — so advising it here
+// would advertise a gesture that does not do what the sentence claims.
+//
+// Appended after deployRoundsSentence rather than woven into the headline, the
+// same way and for the same reason: every wording the deploy already produces
+// stays byte-for-byte what it was.
+func deployBudgetSpentSentence(spent bool) string {
+	if !spent {
+		return ""
+	}
+	return " The automated fix budget for this ticket is spent; Retry deploy on the card grants one further fix round."
+}
+
 // headLagHeadline is the deploy-failed headline for a forge that never
 // reported the head a freshness rebase published — nothing in the branch for
 // a code fixer to change, so the card reds plainly instead of dispatching one.
@@ -2721,17 +2872,25 @@ func (d BoardTransitionDeps) deployFailedOrDispatchFixer(ctx context.Context, pm
 	// attempted belongs on the message a person reads, and it used to be
 	// available only on the path that dispatched another round. A read that
 	// fails leaves rounds at zero, which claims nothing rather than guessing.
-	rounds := 0
+	rounds, budgetSpent := 0, false
 	if comments, err := d.Commenter.ListComments(ctx, pmKey); err == nil {
 		rounds = deployFixRounds(comments)
-		if d.Launcher != nil && rounds < DefaultDeployFixRounds {
-			// rounds travels with the dispatch so the two failure arms INSIDE it
-			// — a refused launch gate, a launch that errors — can state what
-			// already ran. They are deploy failures that followed rounds too.
-			return d.dispatchDeployFixer(ctx, pmKey, res, branch, headline, beforeReview, rounds)
+		if d.Launcher != nil {
+			// Two ways a round may start: the ticket's own budget has room, or a
+			// person re-ran Deploy and re-armed one. Without the second, every
+			// Retry on a spent card found the same conflict, dispatched nobody and
+			// reposted an identical failure (SC-5595).
+			if rounds < DefaultDeployFixRounds || deployFixGrants(comments) > 0 {
+				// rounds travels with the dispatch so the two failure arms INSIDE it
+				// — a refused launch gate, a launch that errors — can state what
+				// already ran. They are deploy failures that followed rounds too.
+				return d.dispatchDeployFixer(ctx, pmKey, res, branch, headline, beforeReview, rounds)
+			}
+			budgetSpent = rounds >= DefaultDeployFixRounds
 		}
 	}
-	return d.deployFailed(pmKey, res.URL, deployReason(headline+deployRoundsSentence(rounds), cause))
+	return d.deployFailed(pmKey, res.URL,
+		deployReason(headline+deployRoundsSentence(rounds)+deployBudgetSpentSentence(budgetSpent), cause))
 }
 
 // dispatchDeployFixer launches the deploy-fixer and, only when one actually
@@ -2771,6 +2930,17 @@ func (d BoardTransitionDeps) dispatchDeployFixer(ctx context.Context, pmKey stri
 	if beforeReview {
 		m.Fields[DeployFixBeforeReviewField] = deployFixBeforeReviewValue
 		order = append(order, DeployFixBeforeReviewField)
+	}
+	// Which budget paid for this round. The caller already counted the rounds
+	// that ran, and the gate above only reaches here with the budget spent when a
+	// grant is standing — so the funding source is derivable and needs no
+	// parameter of its own (AD5). Recorded on the marker the round posts, so the
+	// grant is consumed by the same durable record that proves the round started:
+	// a dispatch that never launched posts nothing and consumes nothing, which is
+	// the SC-4244 rule holding for grants as it already does for rounds.
+	if grantFunded := rounds >= DefaultDeployFixRounds; grantFunded {
+		m.Fields[DeployFixGrantField] = deployFixGrantValue
+		order = append(order, DeployFixGrantField)
 	}
 	if err := postMarker(ctx, d.Commenter, pmKey, m, order...); err != nil {
 		return errors.WrapWithDetails(err, "posting deploy-fix-started marker", "pm", pmKey)

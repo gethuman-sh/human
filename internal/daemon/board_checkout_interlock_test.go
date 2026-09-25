@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -62,7 +63,13 @@ func TestDeployRetry_WaitsWhileTheImplementationContainerHoldsTheCheckout(t *tes
 	require.NoError(t, err)
 	assert.Zero(t, p.call, "no pull request may be pushed into a checkout another stage holds")
 	assert.Zero(t, l.calls, "no reviewer is launched")
-	assert.Empty(t, c.added, "the interlock records nothing on the ticket")
+	// The grant is posted BEFORE runDoneStage starts (SC-5595, AD1) — a person's
+	// Retry deploy is recorded regardless of what the stage that follows does
+	// with it, the same accepted trade-off as a retry the deploy cannot even
+	// start (plan Risks: "a retry the deploy cannot even start banks a grant
+	// anyway"). The interlock itself still pushes and launches nothing.
+	require.Len(t, c.added, 1, "the grant is recorded even though the interlock proceeds no further")
+	assert.True(t, strings.HasPrefix(c.added[0], DeployRetryHeader))
 }
 
 func TestRunDoneStage_ProceedsOnceTheContainerIsGone(t *testing.T) {
