@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { queueOf, isReworkable, reworkKind, isReopenable, verdictFailed, forwardDropAllowed, planReady, badgeInfo, sinceText, formatSilence, safetyReconcileError, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReviewRetryable, STOP_DECISION_LABELS, flowNotice } from "../build/board-queue.js";
+import { queueOf, isReworkable, reworkKind, isReopenable, verdictFailed, forwardDropAllowed, planReady, badgeInfo, sinceText, formatSilence, safetyReconcileError, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReviewRetryable, STOP_DECISION_LABELS, flowNotice, roundText, bugFailedText } from "../build/board-queue.js";
 import { DAEMON_FORWARDED_STATES, FLOW_STATES } from "../build/board-states.js";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -1061,4 +1061,134 @@ test("boardStateFromPayload carries the flow claim", () => {
 
 test("boardStateFromPayload invents no claim", () => {
   assert.equal(boardStateFromPayload({}).flow, undefined);
+});
+
+// SC-3656: the two loop halves alternate their word every round, so a card at
+// round one and a card at round seven must read differently — only the round
+// shows the motion is circular.
+test("a loop card says which round it is in", () => {
+  const info = badgeInfo({ stage: "done", state: "running", deployPhase: "pr-review", prReviewRound: 1, prReviewRoundCap: 8 });
+  assert.equal(info.text, "PR review… — round 1 of 8");
+});
+
+test("round seven does not read like round one", () => {
+  const one = badgeInfo({ stage: "done", state: "running", deployPhase: "pr-review", prReviewRound: 1, prReviewRoundCap: 8 });
+  const seven = badgeInfo({ stage: "done", state: "running", deployPhase: "pr-review", prReviewRound: 7, prReviewRoundCap: 8 });
+  assert.equal(seven.text, "PR review… — round 7 of 8");
+  assert.notEqual(seven.text, one.text);
+});
+
+test("the fix half carries the round too", () => {
+  const info = badgeInfo({ stage: "done", state: "running", deployPhase: "pr-fix", prReviewRound: 3, prReviewRoundCap: 8 });
+  assert.equal(info.text, "fixing PR findings… — round 3 of 8");
+});
+
+test("a recorded phase and a round ride the same badge", () => {
+  const info = badgeInfo({
+    stage: "done",
+    state: "running",
+    deployPhase: "pr-review",
+    activity: "reviewing the PR",
+    prReviewRound: 2,
+    prReviewRoundCap: 8,
+  });
+  assert.equal(info.text, "reviewing the PR… — round 2 of 8");
+});
+
+test("a round the board cannot read is not shown", () => {
+  const noRound = badgeInfo({ stage: "done", state: "running", deployPhase: "pr-review" });
+  assert.equal(noRound.text, "PR review…");
+  const zeroRound = badgeInfo({ stage: "done", state: "running", deployPhase: "pr-review", prReviewRound: 0 });
+  assert.equal(zeroRound.text, "PR review…");
+});
+
+test("a round without a bound still names the round", () => {
+  const info = badgeInfo({ stage: "done", state: "running", deployPhase: "pr-review", prReviewRound: 3 });
+  assert.equal(info.text, "PR review… — round 3");
+});
+
+test("no round on a card outside the loop", () => {
+  const info = badgeInfo({ stage: "implementation", state: "running", prReviewRound: 4 });
+  assert.equal(info.text, "building…");
+});
+
+// AC2: a card whose run ended badly keeps the phase it reached, rendered past
+// tense — the only thing on the card that says how far it got once no
+// blocker record exists.
+test("a failed card says how far it got", () => {
+  const info = badgeInfo({ stage: "implementation", state: "failed", activity: "verifying", error: "boom" });
+  assert.equal(info.text, "✕ stopped while verifying");
+  assert.equal(info.cls, "failed");
+  assert.notEqual(info.spinner, true);
+  assert.match(info.title, /boom/);
+  assert.match(info.title, /stopped while verifying/);
+});
+
+test("a failed card with no recorded phase is unchanged", () => {
+  const info = badgeInfo({ stage: "implementation", state: "failed", error: "boom" });
+  assert.equal(info.text, "✕");
+  assert.equal(info.title, "boom");
+});
+
+test("a failed card with a live agent still reads as working", () => {
+  const info = badgeInfo({
+    stage: "implementation",
+    state: "failed",
+    activity: "verifying",
+    agentLiveness: "live",
+    runningStage: "implementation",
+    error: "boom",
+  });
+  assert.equal(info.text, "still building… — earlier failure recorded");
+  assert.equal(info.cls, "fixing");
+  assert.equal(info.spinner, true);
+  assert.doesNotMatch(info.text, /stopped while/);
+  assert.doesNotMatch(info.title, /stopped while/);
+});
+
+test("a failed card with a stalled agent still reads as stalled", () => {
+  const info = badgeInfo({
+    stage: "implementation",
+    state: "failed",
+    activity: "verifying",
+    agentLiveness: "stalled",
+    agentProgress: { idleSeconds: 600 },
+    error: "boom",
+  });
+  assert.equal(info.cls, "recovering");
+  assert.match(info.text, /agent silent 10m/);
+  assert.equal(info.spinner, false);
+  assert.doesNotMatch(info.text, /stopped while/);
+});
+
+test("a resolved fix card names the phase it reached", () => {
+  const info = badgeInfo({ stage: "implementation", state: "resolved", activity: "reproducing" });
+  assert.equal(info.text, "no fix needed — last phase: reproducing");
+  assert.notEqual(info.spinner, true);
+});
+
+test("a resolved planning card names the phase beside the reason", () => {
+  const info = badgeInfo({ stage: "planning", state: "resolved", resolvedReason: "merged", activity: "checking scope" });
+  assert.equal(info.text, "already shipped — last phase: checking scope");
+});
+
+test("a resolved planning card with no known reason names the phase", () => {
+  const info = badgeInfo({ stage: "planning", state: "resolved", activity: "checking scope" });
+  assert.equal(info.text, "nothing to plan — last phase: checking scope");
+});
+
+test("a resolved card with no phase is unchanged", () => {
+  const info = badgeInfo({ stage: "planning", state: "resolved", resolvedReason: "merged" });
+  assert.equal(info.text, "already shipped");
+});
+
+test("the bugs pane keeps the phase in its louder wording", () => {
+  assert.equal(bugFailedText({ state: "failed", activity: "writing the fix" }), "✕ error — stopped while writing the fix");
+  assert.equal(bugFailedText({ state: "failed" }), "✕ error");
+});
+
+test("roundText refuses a round it could not read", () => {
+  assert.equal(roundText({ stage: "done" }), "");
+  assert.equal(roundText({ stage: "done", prReviewRound: 0 }), "");
+  assert.equal(roundText({ stage: "done", prReviewRound: NaN }), "");
 });

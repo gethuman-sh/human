@@ -5230,8 +5230,8 @@ func startSleepInhibitor(ctx context.Context, out io.Writer, logger zerolog.Logg
 	}
 }
 
-// attachActivity fills each running card's Activity from the phase records the
-// run itself wrote (stage.triage, stage.verify, …).
+// attachActivity fills each running OR ended card's Activity from the phase
+// records the run itself wrote (stage.triage, stage.verify, …).
 //
 // Nothing here is new information. Every stage already writes its phase with a
 // timestamp so the next stage — or a fresh agent taking over from one that died
@@ -5240,24 +5240,54 @@ func startSleepInhibitor(ctx context.Context, out io.Writer, logger zerolog.Logg
 // identically at thirty seconds, at fourteen hours, and when the agent behind it
 // has been dead since the previous afternoon.
 //
-// Only running cards are read: a finished card's last phase is history, and
-// showing it would suggest work still in flight. A store that will not open, or
-// a scope with nothing recorded, leaves the card exactly as it was — the badge
-// degrades to today's behaviour rather than inventing a phase.
+// A card whose run ENDED keeps its phase too, and the tense is the renderer's
+// job rather than a reason to withhold the fact. A reaped or crashed stage
+// writes no blocker record, so without this the only answer to "where did it get
+// to" is one an orderly stop happened to leave behind. The badge renders an
+// ended card's phase past-tense, with no spinner and no age (badgeInfo). A
+// paused (outage) card is deliberately excluded: it has not ended, it is waiting.
+// A store that will not open, or a scope with nothing recorded, leaves the card
+// exactly as it was — the badge degrades to today's behaviour rather than
+// inventing a phase.
+//
+// The store is keyed on the ticket alone, so phase records from every stage the
+// ticket has ever passed through sit in the same scope — stage.triage,
+// stage.fix and stage.pr-review can all still be readable weeks after each of
+// those stages ended (agentstate.DefaultRetention is 14d). LatestActivity is
+// therefore bounded to card.StageRunStartedAt: a stage reaped or crashed before
+// writing anything then finds no entry of its OWN run and shows nothing, rather
+// than the newest leftover entry from a run that never touched this stage
+// (SC-3656 PR review finding). An ended card that carries no StageRunStartedAt
+// at all — e.g. a launch refused before any agent claimed the ticket, which
+// posts [human:needs-planning] with no started marker to bound against — has no
+// run boundary to read its OWN phase against either, so it is skipped rather
+// than falling back to an unbounded read over the whole ticket-wide scope
+// (SC-3656 PR review finding, round 3).
 func attachActivity(ctx context.Context, reg *daemon.ProjectRegistry, view *daemon.BoardView, logger zerolog.Logger) {
 	if view == nil || len(view.Cards) == 0 {
 		return
 	}
 	err := withStateStore(func(store agentstate.Store) error {
 		for i, card := range view.Cards {
-			if card.State != string(daemon.BoardRunning) {
+			if !activityShown(card.State) {
+				continue
+			}
+			since := stageRunStartedAt(card)
+			if since.IsZero() && daemon.BoardState(card.State) != daemon.BoardRunning {
+				// An ended card (failed/resolved) with no run boundary has no
+				// stage-started marker to read its OWN phase against — reading
+				// unbounded would borrow whatever an earlier, unrelated stage
+				// left in the same per-ticket scope and assert it as this run's
+				// (SC-3656 PR review finding, round 3). A running card always
+				// carries a boundary (its BoardRunning marker is what makes it
+				// running), so this arm is reached by ended cards only.
 				continue
 			}
 			entries, err := store.List(ctx, boardStateProject(reg, card.Key), card.Key, board.StagePrefix)
 			if err != nil || len(entries) == 0 {
 				continue
 			}
-			phase, at := board.LatestActivity(entries)
+			phase, at := board.LatestActivity(entries, since)
 			if phase == "" {
 				continue
 			}
@@ -5270,6 +5300,35 @@ func attachActivity(ctx context.Context, reg *daemon.ProjectRegistry, view *daem
 		// The phase is an enrichment, never a gate: a board that cannot read the
 		// state store still renders every card it fetched.
 		logger.Debug().Err(err).Msg("board view: could not read phase records; cards render without them")
+	}
+}
+
+// stageRunStartedAt parses a card's StageRunStartedAt (RFC3339) into the cutoff
+// LatestActivity bounds its search to. Empty or unparseable yields the zero
+// time — no lower bound — which attachActivity treats as "no boundary to read
+// against" for an ended card and skips (a running card always carries one, so
+// only an ended card without a started marker reaches that arm).
+func stageRunStartedAt(card daemon.BoardViewCard) time.Time {
+	if card.StageRunStartedAt == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, card.StageRunStartedAt)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+// activityShown names the card states whose recorded phase the board renders:
+// the run is working, or it has ended and the phase is how far it got. Every
+// other state (idle, queued, done, outage) has no phase to show or no run to
+// show it for.
+func activityShown(state string) bool {
+	switch daemon.BoardState(state) {
+	case daemon.BoardRunning, daemon.BoardFailed, daemon.BoardResolved:
+		return true
+	default:
+		return false
 	}
 }
 
