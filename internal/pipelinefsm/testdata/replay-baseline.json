@@ -25,14 +25,6 @@
           "SC-3282"
         ]
       },
-      "deployed@stopped": {
-        "count": 2,
-        "why": "The same bypass, onto a card that had already failed. FIXED by SC-3852 (same entry point).",
-        "evidence": [
-          "SC-2804"
-        ],
-        "ticket": "SC-3852"
-      },
       "deployed@planned": {
         "count": 1,
         "why": "The same bypass, onto a card holding an unstarted plan. FIXED by SC-3852 (same entry point).",
@@ -128,6 +120,17 @@
         "evidence": [
           "SC-5395"
         ]
+      }
+    }
+  },
+  "retired": {
+    "doc": "Entries that left the buckets above because the machine changed, kept here so a removal is an argument rather than a silent deletion. Nothing reads this block; the assertions are in the buckets.",
+    "kinds": {
+      "deployed@stopped": {
+        "count": 2,
+        "was": "violations",
+        "why": "Recorded as the `human deploy --branch` bypass landing on an already-failed card (evidence SC-2804, ticket SC-3852). SC-5594 made a merge from `stopped` a DESCRIBED move (transition shipped-after-stop): a deploy fixer that converges after a spurious deploy-failed, the confirm-shipped repair pass, and the already-merged carve-out all reach it legitimately, and the strict tracker was refusing the only record those merges had. It could not move to `undescribed` because the baseline's refusal count is checked in both directions and this kind no longer refuses at all. The count of 2 is SC-2804 and SC-2989, and neither is the deploy-specific case this entry once assumed: `stopped` is the ticket's one shared failure state (planning-failed, implementation-failed, review-failed, pr-loop-escalates, launch-refused-no-plan, plan-redrive-exhausted, stage-relaunch-refused, fix-budget-spent and legacy-pr-failed all land there), so shipped-after-stop admits `deployed` after ANY stage failure that lands on it, not only a deploy one. SC-2804 reaches `stopped` via launch-refused-no-plan/plan-redrive-exhausted with no deploy-started anywhere in its history; SC-2989 reaches it via pr-loop-escalates (the [human:pr-review-failed] marker). SC-2857 is a third history showing the same non-deploy route into `stopped` (via review-failed), though its later `deployed` comes off a relaunch back to `reviewed`, not directly off `stopped`, so it does not count toward this entry. The `human deploy --branch` bypass SC-3852 fixed is still held for cards that never entered the machine at all: deployed@filed (15), deployed@planned (1) and deployed@awaiting-decision (1) stay in violations. What holds those off is SC-3852's own entry-point check, not a narrower `stopped`-only edge — the edge itself cannot be scoped to \"after a deploy failure\" because `stopped` does not distinguish why a card stopped.",
+        "ticket": "SC-5594"
       }
     }
   },
