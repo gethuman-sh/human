@@ -174,7 +174,7 @@ func TestDispatchDeployFixer_fromCIGate_carriesNoBeforeReviewField(t *testing.T)
 	c := &fakeCommenter{comments: deployFixReadyComments()}
 	deps := newDeps(c, &fakeLauncher{}, &fakeDeployer{})
 	require.NoError(t, deps.dispatchDeployFixer(context.Background(), "SC-1",
-		PRResult{URL: "https://example/pr/7", Number: 7}, "feat/x", "CI failed", false))
+		PRResult{URL: "https://example/pr/7", Number: 7}, "feat/x", "CI failed", false, 0))
 	started, ok := posted(c, DeployFixStartedHeader)
 	require.True(t, ok)
 	m, parsed := marker.ParseBody(started)
