@@ -697,6 +697,17 @@ export function sortByHandOrder<T extends { key: string }>(cards: T[], order: st
   );
 }
 
+// BoardFlow is the pipeline-level "is work flowing" datum from daemon.BoardFlow.
+// Absent means the board makes no claim (an older daemon, or a stale board whose
+// cards are too old to say anything true about motion).
+export interface BoardFlow {
+  state: string;
+  since?: string;
+  inFlight?: number;
+  keys?: string[];
+  unreadable?: number;
+}
+
 export interface BoardPayload<C> {
   cards?: C[];
   dockerAvailable?: boolean;
@@ -707,6 +718,8 @@ export interface BoardPayload<C> {
   // Declared not-mine dimming, in percent of full opacity; absent means the
   // stylesheet default applies (SC-3409).
   dimPercent?: number;
+  // Pipeline-level flow signal; absent means no claim (SC-3577).
+  flow?: BoardFlow;
 }
 
 export interface BoardState<C> {
@@ -717,6 +730,8 @@ export interface BoardState<C> {
   truncation: string;
   columnOrder?: Record<string, string[]>;
   dimPercent?: number;
+  // Pipeline-level flow signal; absent means no claim (SC-3577).
+  flow?: BoardFlow;
 }
 
 // boardStateFromPayload normalizes a BoardData fetch into the runtime `current`
@@ -733,6 +748,7 @@ export function boardStateFromPayload<C>(payload: BoardPayload<C>, suppressError
     truncation: payload.truncation || "",
     columnOrder: payload.columnOrder,
     dimPercent: payload.dimPercent,
+    flow: payload.flow,
   };
 }
 
@@ -881,16 +897,19 @@ export function safetyPollShouldReconcile(_daemonReachable: boolean): boolean {
 // failure as an explicit staleness banner. An already-empty board shows the
 // plain error unchanged.
 export function safetyReconcileError<C>(
-  prev: { cards: C[]; dockerAvailable: boolean; columnOrder?: Record<string, string[]> },
+  prev: { cards: C[]; dockerAvailable: boolean; columnOrder?: Record<string, string[]>; flow?: BoardFlow },
   message: string,
-): { cards: C[]; dockerAvailable: boolean; error: string; columnOrder?: Record<string, string[]> } {
+): { cards: C[]; dockerAvailable: boolean; error: string; columnOrder?: Record<string, string[]>; flow?: BoardFlow } {
   if (prev.cards.length > 0) {
-    return { ...prev, error: `Board may be stale — ${message}` };
+    // The cards are kept because they are the last thing known to be true; the
+    // flow claim is not, because it was a statement about a moment that has now
+    // passed unverified. Keeping cards and dropping the claim is the honest pair.
+    return { ...prev, error: `Board may be stale — ${message}`, flow: undefined };
   }
   // Docker was not what failed and was not probed, so the last known answer
   // stands. Reporting it unavailable here disabled every agent-launching
   // gesture with the tooltip "Docker required" (SC-4151 G17).
-  return { cards: [], dockerAvailable: prev.dockerAvailable, error: message };
+  return { cards: [], dockerAvailable: prev.dockerAvailable, error: message, flow: undefined };
 }
 
 // isReopenable reports a card the pipeline RESOLVED: it concluded there is
@@ -901,4 +920,55 @@ export function safetyReconcileError<C>(
 // human override; the machine still never retries a terminal of its own accord.
 export function isReopenable(card: QueueCard): boolean {
   return card.state === "resolved";
+}
+
+// flowAge renders an elapsed span for the flow strip. Local rather than shared
+// with board-detail's fmtDuration for the reason recorded there: a two-line
+// formatter is not worth a module edge between two files that import nothing.
+function flowAge(ms: number): string {
+  const m = Math.floor(ms / 60_000);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+
+export interface FlowNotice {
+  level: "stalled" | "unknown";
+  text: string;
+}
+
+// flowNotice turns the daemon's flow datum into the one line the board shows,
+// and into null whenever the board should stay quiet.
+//
+// Silence is the default and the point: idle is a legitimate resting state, and
+// a signal that also fires when nothing is wrong is a signal nobody reads. Only
+// a stall (a demand) and an unknown (an admission) earn the strip.
+export function flowNotice(flow: BoardFlow | undefined, now: Date): FlowNotice | null {
+  if (!flow) return null;
+  if (flow.state !== "stalled" && flow.state !== "unknown") return null;
+
+  const inFlight = flow.inFlight ?? 0;
+  const keys = flow.keys ?? [];
+  const named = keys.length ? ` — ${keys.join(", ")}${inFlight > keys.length ? ` +${inFlight - keys.length} more` : ""}` : "";
+  const tickets = `${inFlight} ticket${inFlight === 1 ? "" : "s"}`;
+
+  if (flow.state === "unknown") {
+    const unreadable = flow.unreadable ?? 0;
+    const why = unreadable > 0
+      ? `${unreadable} ticket${unreadable === 1 ? "" : "s"} could not be read this refresh`
+      : "no progress timestamp could be read";
+    return {
+      level: "unknown",
+      text: `Pipeline flow unknown — ${why}, so the board cannot tell idle from stalled.`,
+    };
+  }
+
+  const parsed = flow.since ? Date.parse(flow.since) : NaN;
+  const age = Number.isNaN(parsed)
+    ? "an unusual length of time"
+    : flowAge(Math.max(0, now.getTime() - parsed));
+  return {
+    level: "stalled",
+    text: `Pipeline stalled — nothing has advanced for ${age}. ${tickets} still marked in flight${named}.`,
+  };
 }

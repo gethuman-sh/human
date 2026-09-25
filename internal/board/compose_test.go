@@ -483,3 +483,34 @@ func TestMarkBlocked_NoBlockersLeavesBothEmpty(t *testing.T) {
 	assert.Empty(t, cards[0].Blockers)
 	assert.Empty(t, cards[0].BlockersOffBoard)
 }
+
+// The flow claim must ride the composed board: without it every consumer would
+// have to derive pipeline motion itself, which is the duplication Compose exists
+// to prevent (SC-3577).
+func TestCompose_AttachesTheFlowClaim(t *testing.T) {
+	view := Compose([]daemon.TrackerIssuesResult{pmResult(
+		[]tracker.Issue{{Key: "SC-1", Title: "wedged"}},
+		map[string]daemon.BoardCard{
+			"SC-1": {
+				Stage:          daemon.BoardImplementation,
+				State:          daemon.BoardRunning,
+				StageEnteredAt: time.Now().Add(-3 * time.Hour),
+			},
+		},
+	)}, true)
+
+	require.NotNil(t, view.Flow, "the board must carry a flow claim")
+	assert.Equal(t, daemon.BoardFlowStalled, view.Flow.State)
+	assert.Equal(t, []string{"SC-1"}, view.Flow.Keys)
+}
+
+// A board with no PM-role tracker makes NO flow claim: the notice explaining the
+// misconfiguration is the only thing that should speak (SC-3577).
+func TestCompose_NoPMTrackerMakesNoFlowClaim(t *testing.T) {
+	view := Compose([]daemon.TrackerIssuesResult{{
+		TrackerName: "human", TrackerKind: "linear", Project: "eng",
+	}}, false)
+
+	assert.Nil(t, view.Flow, "a board with no PM tracker knows nothing about flow")
+	assert.NotEmpty(t, view.Notice)
+}

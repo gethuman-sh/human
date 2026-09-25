@@ -95,6 +95,11 @@ func Compose(results []daemon.TrackerIssuesResult, dockerAvailable bool) daemon.
 		})
 	}
 	markBlocked(view.Cards, blockedBy)
+	// The flow claim is derived from the cards this same pass just built, so it
+	// is true of the project exactly as the cards are — no second fetch, and the
+	// same answer whichever machine composes the board.
+	flow := AssessFlow(view.Cards, time.Now())
+	view.Flow = &flow
 	return view
 }
 

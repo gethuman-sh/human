@@ -96,3 +96,19 @@ func TestRememberBoardView_RoundTripsThroughTheCache(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &view))
 	assert.Equal(t, "one", view.Cards[0].Title)
 }
+
+// A stale board asserts nothing about motion: the cards it shows are old, so any
+// flow claim computed from them describes a moment that has already passed
+// (SC-3577).
+func TestServeLastGoodView_DropsTheFlowClaim(t *testing.T) {
+	cache := tmpCache(t)
+	view := workingView()
+	view.Flow = &daemon.BoardFlow{State: daemon.BoardFlowFlowing}
+	rememberBoardView(cache, "/proj", view, zerolog.Nop())
+
+	served, err := serveLastGoodView(cache, "/proj", errors.New("boom"), zerolog.Nop())
+
+	require.NoError(t, err)
+	assert.Nil(t, served.Flow, "a board this old cannot claim work is flowing")
+	assert.Contains(t, served.Error, "showing the last board that loaded")
+}

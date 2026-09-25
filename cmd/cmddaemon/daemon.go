@@ -2254,6 +2254,11 @@ func serveLastGoodView(cache *boardcache.Store, project string, cause error, log
 // paths would put a card in two places.
 //
 // A miss and an undecodable snapshot are the same answer: nothing remembered.
+//
+// The decoded Flow is always cleared here, not by each caller: a snapshot is
+// never a live motion claim (SC-3577), no matter how it is about to be used, so
+// clearing it at the one decode point keeps both callers correct by
+// construction instead of relying on each to remember.
 func loadBoardSnapshot(cache *boardcache.Store, project string) (daemon.BoardView, bool) {
 	raw, ok := cache.Load(project)
 	if !ok {
@@ -2263,6 +2268,7 @@ func loadBoardSnapshot(cache *boardcache.Store, project string) (daemon.BoardVie
 	if err := json.Unmarshal(raw, &view); err != nil {
 		return daemon.BoardView{}, false
 	}
+	view.Flow = nil
 	return view, true
 }
 
