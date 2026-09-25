@@ -378,7 +378,7 @@ Only after a passing review. This is the board's deploy pipeline (push → draft
 
    One outcome is neither success nor failure: if the command exits with **`deploy refused: this ticket is waiting on a decision`**, an open `[human:options]` block is waiting on a person. That is not a crash and not a deploy failure — no `[human:deploy-failed]` is posted and the card is not red. Do **not** re-run with `--override-decision` (only a person may decide to ship past their own open question) and do **not** merge by hand. Post the Step 9 run summary, record the stage outcome as `needs-input` (per "Recording the board stage outcome"), and STOP, leaving the card paused where it is.
 
-   A third refusal, **`deploy refused: the implementation container for this ticket still holds the checkout`**, means a run of this ticket's implementation stage is still finishing in the same working tree: nothing failed, no marker is posted, and the card is not red. Report it as `retryable` and STOP — the checkout is free once that run ends, and the next attempt proceeds on its own.
+   A second refusal, **`deploy refused: the implementation container for this ticket still holds the checkout`**, means a run of this ticket's implementation stage is still finishing in the same working tree: nothing failed, no marker is posted, and the card is not red. Report it as `retryable` and STOP — the checkout is free once that run ends, and the next attempt proceeds on its own.
 2. In split topology, close `<ENG_KEY>` as well: `human done <ENG_KEY>`.
 3. For the Step 9 report, read `<PR_URL>` from the deployed marker if needed: `human marker show <SEC_KEY> deployed`.
 
