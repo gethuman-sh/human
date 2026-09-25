@@ -172,10 +172,10 @@ func TestAdvanceDeployFix_Outage_MultiLineSummaryCollapsesToOneLine(t *testing.T
 }
 
 func TestDeployFixEscalationReason_OutageIsNotTheCouldNotRecoverDefault(t *testing.T) {
-	reason := deployFixEscalationReason(ExitOutage, "rebase conflict")
+	reason := deployFixEscalationReason(ExitOutage, "rebase conflict", 0)
 	assert.NotContains(t, reason, "could not recover")
 	assert.Contains(t, reason, "substrate")
 
-	retryable := deployFixEscalationReason(ExitRetryable, "rebase conflict")
+	retryable := deployFixEscalationReason(ExitRetryable, "rebase conflict", 0)
 	assert.Contains(t, retryable, "could not recover the deploy")
 }

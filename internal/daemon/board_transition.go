@@ -1881,7 +1881,8 @@ func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string,
 	// line says what the fixer was sent to fix, the four fields say what it
 	// found (SC-5179). Only the exit that defines a blocker carries one; a
 	// needs-input stop may leave the template's placeholders in the object.
-	m := failureMarker(MarkerDeployFailed, deployFixEscalationReason(fixExit, dispatchedFailure(comments)))
+	m := failureMarker(MarkerDeployFailed,
+		deployFixEscalationReason(fixExit, dispatchedFailure(comments), deployFixRounds(comments)))
 	if fixExit == ExitNeedsHumanWork {
 		m = report.Blocker.addTo(m)
 	}
@@ -1949,11 +1950,15 @@ const deployFixStartedType = "deploy-fix-started"
 // same way, which is what SC-3615 recorded: a card whose one offered move
 // reproduced its own failure, and whose actual cause (a single red check) took
 // three queries to establish though it was written on the ticket already.
-func deployFixEscalationReason(fixExit StageExit, dispatched string) string {
+func deployFixEscalationReason(fixExit StageExit, dispatched string, rounds int) string {
 	blocking := ""
 	if dispatched != "" {
 		blocking = " The failure it was sent to fix: " + dispatched
 	}
+	// The round count is appended LAST, after every existing clause, so none of
+	// the wording below changes and a failure with no rounds behind it (rounds
+	// <= 0) claims none — deployRoundsSentence returns "" in that case (SC-3640).
+	attempts := deployRoundsSentence(rounds)
 	// Every member is listed on purpose and the linter enforces it: an exit class
 	// falling silently into the default below is exactly how SC-5592 shipped —
 	// ExitOutage joined the vocabulary and this switch never had to decide. The
@@ -1961,19 +1966,19 @@ func deployFixEscalationReason(fixExit StageExit, dispatched string) string {
 	//exhaustive:enforce
 	switch fixExit {
 	case ExitNeedsInput:
-		return "the deploy fixer needs a human decision — read the PR and its CI, decide, then re-run Deploy." + blocking
+		return "the deploy fixer needs a human decision — read the PR and its CI, decide, then re-run Deploy." + blocking + attempts
 	case ExitNeedsHumanWork:
-		return "the deploy failure needs manual work the fixer could not do — resolve it on the branch, then re-run Deploy." + blocking
+		return "the deploy failure needs manual work the fixer could not do — resolve it on the branch, then re-run Deploy." + blocking + attempts
 	case ExitOutage:
 		// Not reachable from AdvanceDeployFix, which routes an outage to the
 		// uncharged outage marker above before any escalation is composed. Written
 		// as a real answer rather than a fall-through so a direct caller — or a
 		// future route — states the wait instead of blaming the branch.
-		return "the deploy fixer could not reach the substrate it needs — wait for it to come back, then re-run Deploy." + blocking
+		return "the deploy fixer could not reach the substrate it needs — wait for it to come back, then re-run Deploy." + blocking + attempts
 	case ExitRetryable, ExitDone:
-		return deployFixStalledReason(dispatched, blocking)
+		return deployFixStalledReason(dispatched, blocking) + attempts
 	default:
-		return deployFixStalledReason(dispatched, blocking)
+		return deployFixStalledReason(dispatched, blocking) + attempts
 	}
 }
 
@@ -2365,6 +2370,48 @@ func ciFailureFixable(err error) bool {
 	return err != nil && !strings.Contains(err.Error(), "timed out") && !stateUnreadable(err)
 }
 
+// PullRequestShippable reports whether state is DEFINITELY ready to ship: the
+// forge reports the pull request mergeable and every check it reports has
+// passed. Anything less is NOT a no — it is "cannot say", and the done-stage
+// recovery that consults this must leave such a card exactly as it is.
+//
+// An empty check list is deliberately not shippable. Absence is not a verdict:
+// a head pushed moments ago reports no checks because CI has not registered
+// yet, which is the reading that merged a candidate three seconds ahead of its
+// own checks (the ChecksNone rule, internal/forge/forge.go). The deploy gate
+// can wait absence out with deployNoChecksGrace; a probe that fires once per
+// reconcile tick cannot, so it declines.
+func PullRequestShippable(state *forge.PullRequestState) bool {
+	if state == nil || !state.Mergeable || len(state.Checks) == 0 {
+		return false
+	}
+	for _, c := range state.Checks {
+		if c.Conclusion != forge.ChecksPassing {
+			return false
+		}
+	}
+	return true
+}
+
+// deployRoundsSentence states how many automated deploy-fixer rounds ran before
+// a failure, so "no automation exists for this" and "two rounds ran and gave up"
+// are never the same sentence — they were byte-identical, and a card that had
+// been worked twice read exactly like one nothing had touched (SC-3640).
+//
+// Empty for zero: a failure with no rounds behind it must claim none. Appended
+// after the existing headline rather than woven into it, so every wording the
+// deploy already produces stays byte-for-byte what it was.
+func deployRoundsSentence(rounds int) string {
+	switch {
+	case rounds <= 0:
+		return ""
+	case rounds == 1:
+		return " 1 automated fix round ran before this."
+	default:
+		return " " + strconv.Itoa(rounds) + " automated fix rounds ran before this."
+	}
+}
+
 // headLagHeadline is the deploy-failed headline for a forge that never
 // reported the head a freshness rebase published — nothing in the branch for
 // a code fixer to change, so the card reds plainly instead of dispatching one.
@@ -2670,12 +2717,21 @@ func (d BoardTransitionDeps) deployFailed(pmKey, prURL, reason string) error {
 // successful dispatch it returns nil, releasing the deploy gate while the fixer
 // works; the fixer's Stop event drives AdvanceDeployFix, which re-runs the deploy.
 func (d BoardTransitionDeps) deployFailedOrDispatchFixer(ctx context.Context, pmKey string, res PRResult, headline string, cause error, branch string, beforeReview bool) error {
-	if d.Launcher != nil {
-		if comments, err := d.Commenter.ListComments(ctx, pmKey); err == nil && deployFixRounds(comments) < DefaultDeployFixRounds {
-			return d.dispatchDeployFixer(ctx, pmKey, res, branch, headline, beforeReview)
+	// The thread is read on BOTH paths now: the count of what was already
+	// attempted belongs on the message a person reads, and it used to be
+	// available only on the path that dispatched another round. A read that
+	// fails leaves rounds at zero, which claims nothing rather than guessing.
+	rounds := 0
+	if comments, err := d.Commenter.ListComments(ctx, pmKey); err == nil {
+		rounds = deployFixRounds(comments)
+		if d.Launcher != nil && rounds < DefaultDeployFixRounds {
+			// rounds travels with the dispatch so the two failure arms INSIDE it
+			// — a refused launch gate, a launch that errors — can state what
+			// already ran. They are deploy failures that followed rounds too.
+			return d.dispatchDeployFixer(ctx, pmKey, res, branch, headline, beforeReview, rounds)
 		}
 	}
-	return d.deployFailed(pmKey, res.URL, deployReason(headline, cause))
+	return d.deployFailed(pmKey, res.URL, deployReason(headline+deployRoundsSentence(rounds), cause))
 }
 
 // dispatchDeployFixer launches the deploy-fixer and, only when one actually
@@ -2683,14 +2739,18 @@ func (d BoardTransitionDeps) deployFailedOrDispatchFixer(ctx context.Context, pm
 // headline and the PR binding for the trail). The marker keeps the card spinning
 // rather than red while the fixer works — which is only true of a fixer that
 // exists, so it follows the launch (SC-4244).
-func (d BoardTransitionDeps) dispatchDeployFixer(ctx context.Context, pmKey string, res PRResult, branch, headline string, beforeReview bool) error {
-	launched, err := d.launchDeployFixAgent(ctx, pmKey, deployFixDispatch(pmKey, res.Number, branch))
+// rounds is what the caller already counted: the deploy-fixer rounds that ran
+// before this dispatch. Both failure arms below — a refused launch gate, a
+// launch that errors — are deploy failures that FOLLOWED automation, and both
+// used to read exactly like a first failure nothing had touched (SC-3640).
+func (d BoardTransitionDeps) dispatchDeployFixer(ctx context.Context, pmKey string, res PRResult, branch, headline string, beforeReview bool, rounds int) error {
+	launched, err := d.launchDeployFixAgent(ctx, pmKey, deployFixDispatch(pmKey, res.Number, branch), rounds)
 	if stderrors.Is(err, ErrLaunchGateRefused) {
 		// The deploy DID fail — the fixer is only the remedy — and a host that
 		// cannot launch the remedy has no way to record the failure but the
 		// failure itself. Swallowing it left the card on a deploy-fix-started
 		// marker nothing re-drives (SC-5108, round 4).
-		return d.deployFailed(pmKey, res.URL, deployReason(headline, err))
+		return d.deployFailed(pmKey, res.URL, deployReason(headline+deployRoundsSentence(rounds), err))
 	}
 	if err != nil {
 		return err
@@ -2721,7 +2781,7 @@ func (d BoardTransitionDeps) dispatchDeployFixer(ctx context.Context, pmKey stri
 // launchDeployFixAgent launches the deploy-fixer fire-and-forget (no claim: driven
 // by this daemon's local Stop event, like the PR-loop agents). A launch failure
 // reds the card — leaving it spinning would strand the deploy.
-func (d BoardTransitionDeps) launchDeployFixAgent(ctx context.Context, pmKey, prompt string) (launched bool, err error) {
+func (d BoardTransitionDeps) launchDeployFixAgent(ctx context.Context, pmKey, prompt string, rounds int) (launched bool, err error) {
 	// Launch gate: same refusal as the other two launch paths (SC-5108).
 	if d.launchGateBlocked(ctx, pmKey, deployFixAgentStage) {
 		return false, errors.WrapWithDetails(ErrLaunchGateRefused, "launch gate refused the deploy fixer", "pm", pmKey)
@@ -2729,7 +2789,8 @@ func (d BoardTransitionDeps) launchDeployFixAgent(ctx context.Context, pmKey, pr
 	name := agentNameFor(pmKey, deployFixAgentStage)
 	started, err := d.launchAgent(ctx, pmKey, name, prompt)
 	if err != nil {
-		body := markerBody(failureMarker(MarkerDeployFailed, "could not launch the deploy fixer — "+errors.CauseChain(err)))
+		body := markerBody(failureMarker(MarkerDeployFailed,
+			"could not launch the deploy fixer — "+errors.CauseChain(err)+deployRoundsSentence(rounds)))
 		_, _ = d.Commenter.AddComment(ctx, pmKey, body)
 		return false, errors.WrapWithDetails(err, "launching deploy fixer", "pm", pmKey)
 	}

@@ -998,15 +998,38 @@ func TestDeriveBoardCard_APassingLoopRetiresTheReviewPhase(t *testing.T) {
 func TestDeployFixEscalation_NamesTheFailureAndRefusesAPointlessRetry(t *testing.T) {
 	dispatched := "CI checks failed on the pull request (failing: frontend-test) — fix the failing checks, then re-run Deploy"
 
-	reason := deployFixEscalationReason(ExitRetryable, dispatched)
+	reason := deployFixEscalationReason(ExitRetryable, dispatched, 0)
 	assert.Contains(t, reason, "frontend-test", "the blocking check must be named on the card")
 	assert.Contains(t, reason, "will hit the same failure", "a retry that cannot work must not be the advice")
 
 	// With nothing recorded there is nothing to name, and the old wording stands
-	// rather than inventing a cause.
+	// rather than inventing a cause. Zero rounds claims none — this string is the
+	// "does not claim any" criterion (SC-3640).
 	assert.Equal(t,
 		"the deploy fixer stopped without recovering the deploy — check the PR and its CI, then re-run Deploy",
-		deployFixEscalationReason(ExitRetryable, ""))
+		deployFixEscalationReason(ExitRetryable, "", 0))
+}
+
+// SC-3640: automated rounds that preceded a failure state their count, and a
+// failure with none behind it claims none.
+func TestDeployFixEscalation_StatesHowManyRoundsRan(t *testing.T) {
+	dispatched := "CI checks failed on the pull request (failing: frontend-test) — fix the failing checks, then re-run Deploy"
+	reason := deployFixEscalationReason(ExitRetryable, dispatched, 2)
+	assert.Contains(t, reason, "2 automated fix rounds ran before this.")
+	assert.Contains(t, reason, "frontend-test")
+	assert.Contains(t, reason, "will hit the same failure")
+}
+
+func TestDeployFixEscalation_OneRoundIsSingular(t *testing.T) {
+	reason := deployFixEscalationReason(ExitRetryable, "", 1)
+	assert.Contains(t, reason, "1 automated fix round ran before this.")
+}
+
+func TestDeployFixEscalation_NeedsHumanWorkStatesTheCount(t *testing.T) {
+	dispatched := "CI checks failed on the pull request (failing: frontend-test) — fix the failing checks, then re-run Deploy"
+	reason := deployFixEscalationReason(ExitNeedsHumanWork, dispatched, 2)
+	assert.Contains(t, reason, "the deploy failure needs manual work the fixer could not do")
+	assert.Contains(t, reason, "2 automated fix rounds ran before this.")
 }
 
 // The headline is recovered from the newest dispatch, so a second round names
