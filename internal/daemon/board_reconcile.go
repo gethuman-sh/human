@@ -819,17 +819,31 @@ func stuckCardLivenessVerdict(card ReconcileCard, derived BoardCard, alive map[s
 // (SC-3149, and see stuckCardIsOursToRed). Posts through PostFailed, which is
 // already how a non-failure body reaches the ticket from this pass
 // (RunCancelledBody, board_reconcile_orphan.go).
-func completeStrandedPlanHandoff(ctx context.Context, card ReconcileCard, derived BoardCard, deps ReconcileDeps) bool {
+//
+// silenced and reap are the liveness verdict's own judgement (stuckCardLivenessVerdict):
+// silenced true means THIS pass found the agent still alive, judged it hung
+// and stopped it via hungLiveAgent — the run did not exit on its own. Posting
+// the ordinary body in that case would misstate what happened and, because
+// this completion returns before stuckRunningSilenceBody ever runs, would
+// drop the stop from the record entirely — the exact trail SC-2447/SC-3074
+// require. Word it for a reaped run and carry the observation along instead
+// of silently losing it (SC-5090).
+func completeStrandedPlanHandoff(ctx context.Context, card ReconcileCard, derived BoardCard, deps ReconcileDeps, silenced bool, reap SilenceReap) bool {
 	if derived.Stage != BoardPlanning || !planAttachedAfterStart(card.Comments) {
 		return false
 	}
-	if err := deps.PostFailed(ctx, card.Key, planHandoffCompletedBody()); err != nil {
+	body := planHandoffCompletedBody()
+	logMsg := "board reconcile: planning card carries a plan newer than its start and no handoff; posted the handoff on the dead run's behalf"
+	if silenced {
+		body = planHandoffCompletedReapedBody(reap)
+		logMsg = "board reconcile: planning card's agent was still live but silence-reaped by this pass; posted the handoff on the reaped run's behalf"
+	}
+	if err := deps.PostFailed(ctx, card.Key, body); err != nil {
 		deps.Logger.Warn().Err(err).Str("pm", card.Key).
 			Msg("board reconcile: cannot complete the planning handoff; falling through to the stuck-running red")
 		return false
 	}
-	deps.Logger.Info().Str("pm", card.Key).
-		Msg("board reconcile: planning card carries a plan newer than its start and no handoff; posted the handoff on the dead run's behalf")
+	deps.Logger.Info().Str("pm", card.Key).Msg(logMsg)
 	return true
 }
 
@@ -853,7 +867,7 @@ func reconcileOneStuckCard(ctx context.Context, card ReconcileCard, alive map[st
 	}
 	// A planning run that attached its plan before dying produced what the next
 	// stage needs; redding it would re-plan an attached plan (SC-5090).
-	if completeStrandedPlanHandoff(ctx, card, derived, deps) {
+	if completeStrandedPlanHandoff(ctx, card, derived, deps, silenced, reap) {
 		return false
 	}
 	// Repeated silence reaps are bounded and visible, identically to the live

@@ -448,6 +448,22 @@ func handleCleanStageEnding(ctx context.Context, exit RunExit, commenter tracker
 	_, state := latestStageState(exit.Comments, exit.Stage)
 	clean := state == BoardDone
 	if !clean && !endedDeliberately(exit.Comments, exit.Stage, state) {
+		// stageAlreadyFailed, not a bare state != BoardFailed check: BoardFailed
+		// can classify a marker that is not this stage's own ending (a needs-
+		// planning pause classifies (BoardPlanning, BoardFailed) without being
+		// planning's terminal marker), and that shape must still fall through to
+		// the handoff below. Only the stage's OWN newest marker being its
+		// *-failed header — a run that attached its plan and then declared its
+		// own blocker, per the exit-contract's needs-human-work instruction —
+		// must decline it: that failure is a decision about the ticket and must
+		// never be silently overwritten by a handoff synthesized from the plan
+		// comment (SC-5090). Returning false (not falling through to the clean
+		// tail below) is deliberate: the caller must still process this as the
+		// unhandled failure it is, exactly as when completePlanningHandoff
+		// itself declines below.
+		if stageAlreadyFailed(exit.Comments, exit.Stage) {
+			return false
+		}
 		// The planner's deliverable and its handoff are two tracker writes, and a
 		// run that died between them left the deliverable — the thing the next
 		// stage needs — already on the ticket. Complete the handoff rather than
@@ -508,14 +524,26 @@ func completePlanningHandoff(ctx context.Context, exit RunExit, commenter tracke
 	if exit.Stage != BoardPlanning || !planAttachedAfterStart(exit.Comments) {
 		return false
 	}
+	// The zombie sweep can silence-reap a LIVE planning agent (claude still up,
+	// no sign of life past its idle budget) and hand this function that exit
+	// synthesized as a StopFailure — before handleSilenceReapExit ever runs
+	// (it is checked later in handleBoardAgentExit). That run did not exit on
+	// its own, so the "exited before posting this handoff" body would misstate
+	// what happened, and silently completing the handoff with no trace of the
+	// stop would drop the SC-2447/SC-3074 record. Word it honestly and carry
+	// the observation along instead (SC-5090).
 	body := planHandoffCompletedBody()
+	logMsg := "board failure: the planning run attached its plan and exited without the handoff; posted it on the run's behalf"
+	if reap, ok := parseSilenceReap(exit.ErrorType); ok {
+		body = planHandoffCompletedReapedBody(reap)
+		logMsg = "board failure: the planning run's plan was attached but the run was silence-reaped before posting the handoff; posted it on the run's behalf"
+	}
 	if _, err := commenter.AddComment(ctx, exit.PMKey, body); err != nil {
 		deps.Logger.Warn().Err(err).Str("pm", exit.PMKey).Str("agent", exit.AgentName).
 			Msg("board failure: cannot complete the planning handoff; judging the exit as an incomplete stage")
 		return false
 	}
-	deps.Logger.Info().Str("pm", exit.PMKey).Str("agent", exit.AgentName).
-		Msg("board failure: the planning run attached its plan and exited without the handoff; posted it on the run's behalf")
+	deps.Logger.Info().Str("pm", exit.PMKey).Str("agent", exit.AgentName).Msg(logMsg)
 	return true
 }
 
