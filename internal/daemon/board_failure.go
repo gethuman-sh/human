@@ -516,9 +516,6 @@ func completePlanningHandoff(ctx context.Context, exit RunExit, commenter tracke
 	}
 	deps.Logger.Info().Str("pm", exit.PMKey).Str("agent", exit.AgentName).
 		Msg("board failure: the planning run attached its plan and exited without the handoff; posted it on the run's behalf")
-	// The thread as the transition layer will see it, for the same reason the
-	// failed-marker path appends its own post (SC-5104).
-	exit.Comments = append(exit.Comments, tracker.Comment{Body: body, Created: time.Now()})
 	return true
 }
 
