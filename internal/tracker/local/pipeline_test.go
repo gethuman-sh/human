@@ -215,6 +215,22 @@ func TestStrict_refusesATransitionTheMachineDoesNotAllow(t *testing.T) {
 	assert.Len(t, markers, 3)
 }
 
+// A deploy declared failed while it was still running, then merging, is the
+// sequence the machine had no edge for — so strict mode refused the merge's
+// only record and the card was left Done over a failed-deploy trail (SC-5594).
+func TestStrict_admitsAMergeRecordedAfterAFailedDeploy(t *testing.T) {
+	c := newStrictClient(t)
+	ctx := context.Background()
+	issue := create(t, c, "x")
+
+	post(t, c, issue.Key, "[human:deploy-started]")
+	post(t, c, issue.Key, "[human:deploy-fix-started]\nbefore: deploy")
+	post(t, c, issue.Key, "[human:deploy-failed]\nreason: declared failed while the fixer still ran")
+
+	_, err := c.AddComment(ctx, issue.Key, "[human:deployed]\npr: https://example/pr/1")
+	assert.NoError(t, err, "the merge must be recordable after the failure")
+}
+
 func TestStrict_admitsWhenTheHistoryAlreadyLeftTheMachine(t *testing.T) {
 	lenient, _ := newTestClient(t)
 	ctx := context.Background()
