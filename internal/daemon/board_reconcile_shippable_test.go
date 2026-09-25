@@ -25,6 +25,19 @@ func sc3508Thread(base time.Time) []tracker.Comment {
 	}
 }
 
+// resetRedriveBackoff clears the package-level pacing state before a test runs.
+// The backoff key is the card key plus the failure's second-granularity
+// timestamp, and every test here builds its thread from time.Now(), so two
+// tests that start inside the same second share a key: without this, a test
+// that leaves a pending next-attempt time (a refusal never clears it) makes the
+// next test's re-drive look not-due and the assertion fail on ordering alone.
+// The sibling pass resets the same way (board_reconcile_failed_test.go).
+func resetRedriveBackoff(t *testing.T) {
+	t.Helper()
+	shippableRedriveBackoff.reset()
+	t.Cleanup(shippableRedriveBackoff.reset)
+}
+
 // shippableDeps builds the ReconcileDeps for the shippable re-drive arm alone:
 // a stub ShippableProbe, a RetryDeploy that records every pmKey it was called
 // with, empty live agents (nobody home) and a reachable branch — the neutral
@@ -53,6 +66,7 @@ func cardWithThread(thread []tracker.Comment) []ReconcileCard {
 // SC-3640: the SC-3508 shape — a red deploy-failed card whose PR has since
 // become mergeable with every check green — is re-driven rather than left red.
 func TestReconcileShippedFailures_SC3508SequenceRedrivesWhenThePRIsGreen(t *testing.T) {
+	resetRedriveBackoff(t)
 	thread := sc3508Thread(time.Now().Add(-time.Hour))
 	var redriven []string
 	deps := shippableDeps(true, nil, &redriven)
@@ -70,6 +84,7 @@ func TestReconcileShippedFailures_SC3508SequenceRedrivesWhenThePRIsGreen(t *test
 // the same in-place retry the board's Retry-deploy gesture issues); once that
 // marker lands the card is no longer red.
 func TestReconcileShippedFailures_RedriveClearsTheRed(t *testing.T) {
+	resetRedriveBackoff(t)
 	base := time.Now().Add(-time.Hour)
 	thread := sc3508Thread(base)
 	thread = append(thread, cmt(prReviewStartedBody("https://github.com/o/r/pull/408", 408, "autofix/sc-3508"), base.Add(21*time.Minute)))
@@ -81,6 +96,7 @@ func TestReconcileShippedFailures_RedriveClearsTheRed(t *testing.T) {
 }
 
 func TestReconcileShippedFailures_NotShippablePRStaysRed(t *testing.T) {
+	resetRedriveBackoff(t)
 	thread := sc3508Thread(time.Now().Add(-time.Hour))
 	var redriven []string
 	deps := shippableDeps(false, nil, &redriven)
@@ -92,6 +108,7 @@ func TestReconcileShippedFailures_NotShippablePRStaysRed(t *testing.T) {
 }
 
 func TestReconcileShippedFailures_UnreadableShippableStateStaysRed(t *testing.T) {
+	resetRedriveBackoff(t)
 	thread := sc3508Thread(time.Now().Add(-time.Hour))
 	var redriven []string
 	deps := shippableDeps(false, errors.New("token expired"), &redriven)
@@ -103,6 +120,7 @@ func TestReconcileShippedFailures_UnreadableShippableStateStaysRed(t *testing.T)
 }
 
 func TestReconcileShippedFailures_LiveDoneStageAgentSpared(t *testing.T) {
+	resetRedriveBackoff(t)
 	thread := sc3508Thread(time.Now().Add(-time.Hour))
 	var redriven []string
 	deps := shippableDeps(true, nil, &redriven)
@@ -115,6 +133,7 @@ func TestReconcileShippedFailures_LiveDoneStageAgentSpared(t *testing.T) {
 }
 
 func TestReconcileShippedFailures_DeployRunInFlightSpared(t *testing.T) {
+	resetRedriveBackoff(t)
 	thread := sc3508Thread(time.Now().Add(-time.Hour))
 	var redriven []string
 	deps := shippableDeps(true, nil, &redriven)
@@ -129,6 +148,7 @@ func TestReconcileShippedFailures_DeployRunInFlightSpared(t *testing.T) {
 // Unusable liveness (a nil lister, or a failed lookup) spares only the
 // re-drive arm; the merged arm needs no liveness at all and must still clear.
 func TestReconcileShippedFailures_UnusableLivenessSparesTheRedriveOnly(t *testing.T) {
+	resetRedriveBackoff(t)
 	thread := []tracker.Comment{
 		cmt("[human:deploy-failed]\nmerge conflict on main\npr: https://github.com/o/r/pull/7", time.Unix(1, 0)),
 	}
@@ -149,6 +169,7 @@ func TestReconcileShippedFailures_UnusableLivenessSparesTheRedriveOnly(t *testin
 // A [human:pr-review-failed] card derives to (done, failed) too, and it is a
 // verdict about the change's content — green CI does not answer it.
 func TestReconcileShippedFailures_PRReviewFailedIsNotRedriven(t *testing.T) {
+	resetRedriveBackoff(t)
 	base := time.Now().Add(-time.Hour)
 	thread := []tracker.Comment{
 		cmt("[human:ready-for-review]\nbranch: autofix/sc-3508", base),
@@ -165,6 +186,7 @@ func TestReconcileShippedFailures_PRReviewFailedIsNotRedriven(t *testing.T) {
 
 // Waiting on a person is the one state the machine may not resolve.
 func TestReconcileShippedFailures_OpenDecisionSpared(t *testing.T) {
+	resetRedriveBackoff(t)
 	base := time.Now().Add(-time.Hour)
 	thread := sc3508Thread(base)
 	optionsAt := base.Add(21 * time.Minute)
@@ -182,6 +204,7 @@ func TestReconcileShippedFailures_OpenDecisionSpared(t *testing.T) {
 // The re-drive PUSHES the branch (openDraftPR); a machine that cannot resolve
 // it would turn a stale red into a fresh push failure (SC-652).
 func TestReconcileShippedFailures_UnreachableBranchLeftForAnotherMachine(t *testing.T) {
+	resetRedriveBackoff(t)
 	thread := sc3508Thread(time.Now().Add(-time.Hour))
 	var redriven []string
 	deps := shippableDeps(true, nil, &redriven)
@@ -196,6 +219,7 @@ func TestReconcileShippedFailures_UnreachableBranchLeftForAnotherMachine(t *test
 // A failure inside FailedRecoveryGrace is left to the live exit path; past it,
 // the durable re-drive picks it up.
 func TestReconcileShippedFailures_FailureInsideTheGraceLeftToTheLivePath(t *testing.T) {
+	resetRedriveBackoff(t)
 	base := time.Now().Add(-time.Hour)
 	thread := sc3508Thread(base)
 	failedAt := base.Add(20 * time.Minute)
@@ -214,6 +238,7 @@ func TestReconcileShippedFailures_FailureInsideTheGraceLeftToTheLivePath(t *test
 // A refusal that started nothing costs no immediate retry — the backoff keeps
 // the next try off the tick.
 func TestReconcileShippedFailures_RedriveBacksOffOnARefusal(t *testing.T) {
+	resetRedriveBackoff(t)
 	base := time.Now().Add(-time.Hour)
 	thread := sc3508Thread(base)
 	var calls int
@@ -233,6 +258,7 @@ func TestReconcileShippedFailures_RedriveBacksOffOnARefusal(t *testing.T) {
 // A merged PR still clears with the old, merged-only behaviour when the
 // shippable arm is entirely disabled (both deps nil).
 func TestReconcileShippedFailures_MergedStillClearsWithNoShippableProbe(t *testing.T) {
+	resetRedriveBackoff(t)
 	thread := []tracker.Comment{
 		cmt("[human:deploy-failed]\nmerge conflict on main\npr: https://github.com/o/r/pull/7", time.Unix(1, 0)),
 	}
