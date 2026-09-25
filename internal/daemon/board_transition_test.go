@@ -36,6 +36,9 @@ type fakeCommenter struct {
 	byKey map[string][]tracker.Comment
 	// listErrFor makes reading that one key fail.
 	listErrFor string
+	// refused records the bodies AddComment rejected, so a test can assert a
+	// post was retried rather than only that it never landed.
+	refused []string
 }
 
 func (f *fakeCommenter) ListComments(_ context.Context, key string) ([]tracker.Comment, error) {
@@ -50,6 +53,7 @@ func (f *fakeCommenter) ListComments(_ context.Context, key string) ([]tracker.C
 
 func (f *fakeCommenter) AddComment(_ context.Context, _ string, body string) (*tracker.Comment, error) {
 	if f.addErr != nil && (f.addErrFor == "" || strings.Contains(body, f.addErrFor)) {
+		f.refused = append(f.refused, body)
 		return nil, f.addErr
 	}
 	f.added = append(f.added, body)
@@ -826,6 +830,78 @@ func TestApplyTransitionDeployCloseFails(t *testing.T) {
 	// The close-failed marker must NOT drive a stage/state transition (never reds).
 	_, _, ok := ClassifyMarker(surfaced)
 	assert.False(t, ok, "close-failed marker must not be a registered stage marker")
+}
+
+// TestDeployBranch_DeployedPostRefused_LeavesTheTicketOpen is the SC-5594
+// regression. A spurious [human:deploy-failed] puts the item at FSM `stopped`,
+// where a strict tracker refuses [human:deployed] (the missing edge, fixed in
+// the same commit). The engine must not answer a refused record by closing the
+// ticket: that is the Done status over a failed-deploy trail the ticket forbids.
+func TestDeployBranch_DeployedPostRefused_LeavesTheTicketOpen(t *testing.T) {
+	syncDeploy(t)
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nengineering: HUM-9\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]\nverdict: pass", time.Unix(2, 0)),
+		cmt("[human:deploy-fix-started]\nbefore: deploy", time.Unix(3, 0)),
+		cmt("[human:deploy-failed]\nreason: the deploy was declared failed while its fixer still ran", time.Unix(4, 0)),
+	}}
+	c.addErr = errors.New("strict local tracker refused a marker the state machine does not allow here")
+	c.addErrFor = DeployedHeader
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/7", Number: 7},
+		checks: []forge.ChecksState{forge.ChecksPassing}}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	var closed string
+	deps.CloseTicket = func(pmKey string) error { closed = pmKey; return nil }
+
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", PMTitle: "t", From: BoardVerification, To: BoardDoneStage})
+
+	require.NoError(t, err, "the merge happened; an unrecordable record must not red the card")
+	assert.Equal(t, 1, p.merged)
+	assert.Empty(t, closed, "a merge that could not be recorded must leave the ticket open")
+	assert.Len(t, c.refused, 2, "the record is attempted twice before it is given up on")
+}
+
+// The already-merged carve-out ends on the same terminal success path and must
+// make the same promise (SC-5594 sibling, board_transition.go's BranchMerged
+// short-circuit).
+func TestDeployBranch_AlreadyMerged_DeployedPostRefused_LeavesTheTicketOpen(t *testing.T) {
+	syncDeploy(t)
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nengineering: HUM-9\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]\nverdict: pass", time.Unix(2, 0)),
+	}}
+	c.addErr = errors.New("tracker unavailable")
+	c.addErrFor = DeployedHeader
+	p := &fakeDeployer{alreadyMerged: true}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	var closed string
+	deps.CloseTicket = func(pmKey string) error { closed = pmKey; return nil }
+
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", PMTitle: "t", From: BoardVerification, To: BoardDoneStage})
+
+	require.NoError(t, err)
+	assert.Zero(t, p.call, "the carve-out still opens no pull request")
+	assert.Empty(t, closed)
+	assert.Len(t, c.refused, 2)
+}
+
+// The review loop's own already-merged carve-out is the third site with the
+// same shape (openDraftPRAndReview).
+func TestOpenDraftPRAndReview_AlreadyMerged_DeployedPostRefused_LeavesTheTicketOpen(t *testing.T) {
+	c := &fakeCommenter{}
+	c.addErr = errors.New("tracker unavailable")
+	c.addErrFor = DeployedHeader
+	p := &fakeDeployer{alreadyMerged: true}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	var closed string
+	deps.CloseTicket = func(pmKey string) error { closed = pmKey; return nil }
+
+	err := deps.openDraftPRAndReview(context.Background(), "SC-1", BoardCard{Branch: "feat/x"})
+
+	require.NoError(t, err)
+	assert.Zero(t, p.call)
+	assert.Empty(t, closed)
+	assert.Len(t, c.refused, 2)
 }
 
 func TestCloseFailedHeaderUnregistered(t *testing.T) {

@@ -389,3 +389,24 @@ func TestReplay_AReworkHandoffReturnsTheItemToHandedOff(t *testing.T) {
 	assert.Equal(t, "handed-off", r.State, "the rebuild is handed back and awaits a fresh review")
 	assert.True(t, doc.Accepts("reviewed", "ready-for-review"))
 }
+
+// A deploy that was declared failed while it was still running, and then
+// merged: the spurious [human:deploy-failed] leaves the item at `stopped` and
+// the engine's [human:deployed] has to be a described move, or the strict
+// tracker refuses the only record the merge has (SC-5594).
+func TestReplay_AMergeAfterAFailedDeployIsDescribed(t *testing.T) {
+	doc, err := Load()
+	require.NoError(t, err)
+
+	failed := doc.Replay([]string{"deploy-started", "deploy-fix-started", "deploy-failed"})
+	require.Empty(t, failed.Refused, "the spurious failure itself is a described move")
+	require.Equal(t, "stopped", failed.State)
+
+	assert.True(t, doc.Accepts("stopped", "deployed"),
+		"a deploy that merges after being marked failed must be able to record it")
+
+	shipped := doc.Replay([]string{"deploy-started", "deploy-fix-started", "deploy-failed", "deployed"})
+	assert.Empty(t, shipped.Refused)
+	assert.Equal(t, "merged", shipped.State)
+	assert.True(t, shipped.Terminal)
+}

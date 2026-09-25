@@ -25,14 +25,6 @@
           "SC-3282"
         ]
       },
-      "deployed@stopped": {
-        "count": 2,
-        "why": "The same bypass, onto a card that had already failed. FIXED by SC-3852 (same entry point).",
-        "evidence": [
-          "SC-2804"
-        ],
-        "ticket": "SC-3852"
-      },
       "deployed@planned": {
         "count": 1,
         "why": "The same bypass, onto a card holding an unstarted plan. FIXED by SC-3852 (same entry point).",
@@ -128,6 +120,17 @@
         "evidence": [
           "SC-5395"
         ]
+      }
+    }
+  },
+  "retired": {
+    "doc": "Entries that left the buckets above because the machine changed, kept here so a removal is an argument rather than a silent deletion. Nothing reads this block; the assertions are in the buckets.",
+    "kinds": {
+      "deployed@stopped": {
+        "count": 2,
+        "was": "violations",
+        "why": "Recorded as the `human deploy --branch` bypass landing on an already-failed card (evidence SC-2804, ticket SC-3852). SC-5594 made a merge from `stopped` a DESCRIBED move (transition shipped-after-stop): a deploy fixer that converges after a spurious deploy-failed, the confirm-shipped repair pass, and the already-merged carve-out all reach it legitimately, and the strict tracker was refusing the only record those merges had. It could not move to `undescribed` because the baseline's refusal count is checked in both directions and this kind no longer refuses at all. The bypass itself is still held: deployed@filed (15), deployed@planned (1) and deployed@awaiting-decision (1) stay in violations, and a deploy that never entered the machine has no deploy-started to reach `stopped` with.",
+        "ticket": "SC-5594"
       }
     }
   },

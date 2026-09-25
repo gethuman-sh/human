@@ -1132,11 +1132,12 @@ func (d BoardTransitionDeps) openDraftPRAndReview(ctx context.Context, pmKey str
 		return err
 	}
 	if d.Deployer.BranchMerged(ctx, d.WorkspaceDir, card.Branch) {
-		_ = postMarker(ctx, d.Commenter, pmKey, marker.Marker{
+		if d.recordDeployedBestEffort(ctx, pmKey, marker.Marker{
 			Type:   MarkerDeployed,
 			Fields: fields("merged", "already in the base branch; no new PR opened"),
-		})
-		d.closeTicketBestEffort(pmKey)
+		}) {
+			d.closeTicketBestEffort(pmKey)
+		}
 		return nil
 	}
 	// The title is only used on a fresh create; the approval path adopts.
@@ -2148,12 +2149,12 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 	// Implementation already carry (SC-911).
 	if d.Deployer.BranchMerged(ctx, d.WorkspaceDir, branch) {
 		logger.Info().Msg("deploy: branch is already on the base; nothing to ship")
-		_, _ = d.Commenter.AddComment(ctx, pmKey,
-			markerBody(marker.Marker{
-				Type:   MarkerDeployed,
-				Fields: fields("merged", "already in the base branch; no new PR opened"),
-			}))
-		d.closeTicketBestEffort(pmKey)
+		if d.recordDeployedBestEffort(ctx, pmKey, marker.Marker{
+			Type:   MarkerDeployed,
+			Fields: fields("merged", "already in the base branch; no new PR opened"),
+		}) {
+			d.closeTicketBestEffort(pmKey)
+		}
 		return nil
 	}
 
@@ -2216,15 +2217,45 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 	// are best-effort and must never turn the card red. Best-effort here means
 	// recorded-and-surfaced, not silent: a failed close leaves the card in the
 	// board's Fix column (the frontend only drops a card once the ticket leaves
-	// the tracker's open list), so the operator must see it and close by hand.
+	// the tracker's open list), so the operator must see it and close by hand;
+	// an unrecordable merge is likewise surfaced, and the close is withheld so
+	// the trail and the status cannot contradict (SC-5594).
 	logger.Info().Int("pr", res.Number).Str("url", res.URL).Msg("deploy: merged")
 	_ = d.Deployer.DeleteRemoteBranch(ctx, d.WorkspaceDir, branch)
-	_ = postMarker(ctx, d.Commenter, pmKey, marker.Marker{
+	if d.recordDeployedBestEffort(ctx, pmKey, marker.Marker{
 		Type: MarkerDeployed, Fields: fields("pr", res.URL),
-	})
-	d.closeTicketBestEffort(pmKey)
-	logger.Info().Msg("deploy: done")
+	}) {
+		d.closeTicketBestEffort(pmKey)
+		logger.Info().Msg("deploy: done")
+	}
 	return nil
+}
+
+// recordDeployedBestEffort puts the merge on the ticket and reports whether it
+// landed. The merge itself is done and must never red the card, but the record
+// is not optional the way the close is: the trail and the status are read
+// together, so a close on top of a missing [human:deployed] leaves a card that
+// derives as a failed deploy and is hidden as Done, with nothing in the log
+// saying so (SC-5594). One immediate retry on its own context recovers both the
+// transient tracker blip and a deploy whose 45-minute deadline is already
+// spent; a refusal that outlives that is logged, and the caller answers a false
+// by leaving the ticket OPEN — the card then stays visible and the next
+// re-drive (or reconcileShippedFailures, which sees open cards only) can
+// repair it. Mirrors closeTicketBestEffort, whose failure is surfaced the same
+// way rather than swallowed.
+func (d BoardTransitionDeps) recordDeployedBestEffort(ctx context.Context, pmKey string, m marker.Marker) bool {
+	err := postMarker(ctx, d.Commenter, pmKey, m)
+	if err != nil {
+		postCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		err = postMarker(postCtx, d.Commenter, pmKey, m)
+	}
+	if err == nil {
+		return true
+	}
+	d.Logger.Warn().Err(err).Str("pm", pmKey).
+		Msg("the merge could not be recorded on the ticket; leaving it open so the card stays visible")
+	return false
 }
 
 // headlineOf takes the actionable first line of a marker body — the same line
