@@ -56,6 +56,7 @@ import {
   isReplannable,
   forwardDropAllowed,
   badgeInfo,
+  bugFailedText,
   cardError,
   sortByHandOrder,
   insertKeyAt,
@@ -140,6 +141,11 @@ interface Card {
   // while the fixer runs, absent for a plain deploy. badgeInfo reads it so the
   // badge names the half that is actually running instead of "deploying…".
   deployPhase?: string;
+  // Which review→fix round a running done-stage card is in, and the bound it
+  // runs against. badgeInfo appends "round 3 of 8" to the badge; absent on every
+  // card that is not mid-loop, which renders exactly as before.
+  prReviewRound?: number;
+  prReviewRoundCap?: number;
   // On a FAILED card only: another stage of the same ticket still showing a
   // start. The Go overlay joins it into the liveness question and badgeInfo
   // names it, so a red card with a live agent behind it says which stage is
@@ -1232,7 +1238,9 @@ function renderBugCard(card: Card): HTMLElement {
     // so, with the recorded reason a hover away.
     const failed = el.querySelector<HTMLElement>(".badge.failed");
     if (failed) {
-      failed.textContent = "✕ error";
+      // The pane's own wording, carrying the phase the run reached — the board
+      // badge's past tense must survive the louder rewrite, not be erased by it.
+      failed.textContent = bugFailedText(card);
       if (card.error) failed.title = card.error;
     }
   }
