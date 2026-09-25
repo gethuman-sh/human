@@ -963,6 +963,60 @@ func TestDeriveBoardCard_DeployPhaseFollowsTheNewestHalf(t *testing.T) {
 	assert.Equal(t, DeployPhasePRReview, card.DeployPhase)
 }
 
+// A running loop card's badge round is the same count the loop itself acts
+// on — one review-started marker is round 1.
+func TestDeriveBoardCard_PRLoopRoundIsTheReviewCount(t *testing.T) {
+	comments := reviewStartedComments(1, "https://example/pr/7", 7, "feat/x")
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, 1, card.PRReviewRound)
+	assert.Equal(t, DefaultPRReviewRounds, card.PRReviewRoundCap)
+	assert.Equal(t, "pr-review", card.DeployPhase)
+}
+
+// A card seven rounds in reads differently from a card at round one — the
+// number, not just the alternating label, must move.
+func TestDeriveBoardCard_PRLoopRoundAtSeven(t *testing.T) {
+	comments := reviewStartedComments(7, "https://example/pr/7", 7, "feat/x")
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, 7, card.PRReviewRound)
+	assert.Equal(t, DefaultPRReviewRounds, card.PRReviewRoundCap)
+}
+
+// The fix half of the loop carries the same round count as the review half.
+func TestDeriveBoardCard_PRLoopRoundOnTheFixHalf(t *testing.T) {
+	comments := reviewStartedComments(3, "https://example/pr/7", 7, "feat/x")
+	comments = append(comments, cmt(PRFixStartedHeader, time.Unix(100, 0)))
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, DeployPhasePRFix, card.DeployPhase)
+	assert.Equal(t, 3, card.PRReviewRound)
+}
+
+// A plain deploy is not in the loop at all: no round, no bound.
+func TestDeriveBoardCard_PRLoopRoundEmptyForPlainDeploy(t *testing.T) {
+	comments := []tracker.Comment{cmt(DeployStartedHeader, time.Unix(2, 0))}
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, 0, card.PRReviewRound)
+	assert.Equal(t, 0, card.PRReviewRoundCap)
+}
+
+// A failed loop card's question is how far it got (its recorded phase), not
+// which round it was on — the round is deliberately excluded from a red card.
+func TestDeriveBoardCard_PRLoopRoundEmptyOnAFailedLoopCard(t *testing.T) {
+	comments := []tracker.Comment{
+		cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), time.Unix(2, 0)),
+		cmt(markerBody(failureMarker(MarkerPRReviewFailed, "boom")), time.Unix(3, 0)),
+	}
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, BoardFailed, card.State)
+	assert.Equal(t, DeployPhasePRReview, card.DeployPhase, "agent lookup keeps it")
+	assert.Equal(t, 0, card.PRReviewRound)
+}
+
 // TestDeployPhaseFor_FailedLoopCard covers SC-4151 A1's derivation half: a red
 // done-stage card names the loop half that was started under the failure, so
 // AgentNamesForCard can ask whether it is still running. The badge never reads

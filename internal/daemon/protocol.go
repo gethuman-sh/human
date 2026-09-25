@@ -228,6 +228,16 @@ type BoardViewCard struct {
 	// explicit field copy below — the daemon→desktop hop is a Go copy, not a
 	// JSON re-tag.
 	DeployPhase string `json:"deployPhase,omitempty"`
+	// PRReviewRound / PRReviewRoundCap are which round of the pre-merge
+	// review→fix loop a RUNNING done-stage card is in and the outer bound it
+	// runs against (DefaultPRReviewRounds, 8). Zero on every other card — and
+	// zero is load-bearing: the badge then renders exactly as it did before
+	// rather than claiming a round it could not read. The bound is shipped
+	// rather than copied into the frontend because it is a daemon constant that
+	// has already moved once (SC-5174), and a stale copy would render
+	// "round 8 of 3". Populated by the explicit field copy in compose.go.
+	PRReviewRound    int `json:"prReviewRound,omitempty"`
+	PRReviewRoundCap int `json:"prReviewRoundCap,omitempty"`
 	// RunningStage names another stage of a FAILED card's ticket whose own
 	// newest marker is a start — the run the card's single (stage, state) pair
 	// cannot show. The viewer joins it into the liveness question so a red card

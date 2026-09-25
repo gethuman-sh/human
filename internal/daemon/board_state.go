@@ -128,6 +128,18 @@ type BoardCard struct {
 	// review findings…" instead of "deploying…" so the loop is visible while it
 	// runs.
 	DeployPhase string `json:"deploy_phase,omitempty"`
+	// PRReviewRound is which round of the pre-merge review→fix loop a RUNNING
+	// done-stage card is in, and PRReviewRoundCap the outer bound it runs
+	// against (DefaultPRReviewRounds). Both are zero on every other card, and
+	// zero renders exactly as the card rendered before.
+	//
+	// The two loop halves alternate their badge word, so a card at round one and
+	// a card at round seven read identically: alternating labels can show motion,
+	// only the round can show the motion is circular. The number is not new —
+	// prReviewRounds is the counter the loop's own outer bound reads — it has
+	// simply never left the daemon.
+	PRReviewRound    int `json:"pr_review_round,omitempty"`
+	PRReviewRoundCap int `json:"pr_review_round_cap,omitempty"`
 	// Degraded marks a card whose comment thread could not be read this scan
 	// (a ListComments error/timeout). It is set at the fetch-error site, never
 	// by DeriveBoardCard (which only runs on a successful fetch). Stage/State
@@ -240,6 +252,7 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 		card.WaitsFor = waitsForOf(latest)
 	}
 	card.DeployPhase = deployPhaseFor(card, comments)
+	card.PRReviewRound, card.PRReviewRoundCap = prLoopRoundFor(card, comments)
 	card.RunningStage = runningStageElsewhere(comments, card.placement())
 	card.StopDecision, card.StopLinkedKey, card.StopReasoning = ticketReviewStop(latest)
 	card.ResolvedReason = nothingToDoReason(latest)
@@ -622,6 +635,31 @@ func deployPhaseFor(card BoardCard, comments []tracker.Comment) string {
 		return doneStageStartedHalf(comments)
 	}
 	return ""
+}
+
+// prLoopRoundFor is which review→fix round a running loop card is in, with the
+// bound it runs against, or (0, 0) for every card that is not one.
+//
+// A failed loop card is deliberately excluded even though deployPhaseFor still
+// names its half: that half exists for AgentNamesForCard, not for the badge,
+// and a red card's question is how far it got (its recorded phase), not which
+// round it was on. A count of zero — a thread whose review markers cannot be
+// read — is returned as zero rather than as "round 0": an unreadable count must
+// degrade to the badge exactly as it rendered before, never to an invented one.
+//
+// The count is thread-wide rather than scoped to this attempt, because that is
+// the number EvaluatePRLoop itself acts on against the same bound: a board that
+// disagreed with the loop's own escalation arithmetic would be worse than one
+// that agrees with it.
+func prLoopRoundFor(card BoardCard, comments []tracker.Comment) (round, bound int) {
+	if card.Stage != BoardDoneStage || card.State != BoardRunning || card.DeployPhase == "" {
+		return 0, 0
+	}
+	n := prReviewRounds(comments)
+	if n <= 0 {
+		return 0, 0
+	}
+	return n, DefaultPRReviewRounds
 }
 
 // derivePRURL resolves the card's PR link, newest-marker-first: a deployed

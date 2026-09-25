@@ -158,6 +158,26 @@ func TestCompose_carriesResolvedReason(t *testing.T) {
 	assert.Equal(t, "", cardByKey(t, view, "SC-2").ResolvedReason)
 }
 
+// The daemon→wire hop is the one silent-drop point for a new board-card field
+// (SC-5326 r1); this pins it for the review-loop round.
+func TestCompose_carriesPRReviewRound(t *testing.T) {
+	view := Compose([]daemon.TrackerIssuesResult{pmResult(
+		[]tracker.Issue{{Key: "SC-1", Title: "mid loop"}, {Key: "SC-2", Title: "not in the loop"}},
+		map[string]daemon.BoardCard{
+			"SC-1": {Stage: daemon.BoardDoneStage, State: daemon.BoardRunning, DeployPhase: "pr-review", PRReviewRound: 3, PRReviewRoundCap: 8},
+			"SC-2": {Stage: daemon.BoardDoneStage, State: daemon.BoardRunning},
+		},
+	)}, true)
+
+	c1 := cardByKey(t, view, "SC-1")
+	assert.Equal(t, 3, c1.PRReviewRound)
+	assert.Equal(t, 8, c1.PRReviewRoundCap)
+
+	c2 := cardByKey(t, view, "SC-2")
+	assert.Equal(t, 0, c2.PRReviewRound)
+	assert.Equal(t, 0, c2.PRReviewRoundCap)
+}
+
 // Hidden cards must still be composed: the frontend filters them, so dropping
 // them here would make "reveal hidden" impossible without a refetch.
 func TestCompose_ReturnsCardsTheViewerMayHide(t *testing.T) {
