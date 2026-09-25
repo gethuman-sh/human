@@ -76,6 +76,23 @@ func TestDaemonPostedMarkersSatisfyTheirContract(t *testing.T) {
 			Fields: fields("pr", "https://example/pr/7", "number", "7", "branch", "feat/x"),
 			Body:   "CI checks failed on the pull request",
 		}, "pr", "number", "branch")},
+		// SC-5595: the grant a person's Retry deploy mints. Its body is fixed and
+		// it carries no fields, so what this checks is that a marker with a body
+		// and no field block still reads back as its own type.
+		{MarkerDeployRetry, markerBody(marker.Marker{
+			Type: MarkerDeployRetry,
+			Body: deployRetryGrantBody,
+		})},
+		// The grant-funded round's consumption record, on the marker that spends
+		// it — both optional fields set at once, the shape dispatchDeployFixer
+		// produces for a before-review round funded by a retry.
+		{MarkerDeployFixStarted, markerBody(marker.Marker{
+			Type: MarkerDeployFixStarted,
+			Fields: fields("pr", "https://example/pr/7", "number", "7", "branch", "feat/x",
+				DeployFixBeforeReviewField, deployFixBeforeReviewValue,
+				DeployFixGrantField, deployFixGrantValue),
+			Body: "CI checks failed on the pull request",
+		}, "pr", "number", "branch", DeployFixBeforeReviewField, DeployFixGrantField)},
 		{MarkerHandoffCheckUnreadable, markerBody(marker.Marker{
 			Type: MarkerHandoffCheckUnreadable,
 			Body: "could not verify the handoff for branch feat/x on this machine — git timed out",
