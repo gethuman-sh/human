@@ -274,7 +274,7 @@ func TestReconcileShippedFailures_MergedPRClearsRed(t *testing.T) {
 		postedKey, postedURL = pmKey, prURL
 		return nil
 	}
-	n := reconcileShippedFailures(context.Background(), ownWork(cards), ReconcileDeps{MergedProbe: merged, PostDeployed: post})
+	n := reconcileShippedFailures(context.Background(), ownWork(cards), ReconcileDeps{MergedProbe: merged, PostDeployed: post}, time.Now())
 
 	assert.Equal(t, 1, n)
 	assert.Equal(t, "SC-1", postedKey)
@@ -293,7 +293,7 @@ func TestReconcileShippedFailures_UnmergedPRLeftRed(t *testing.T) {
 	posted := false
 	merged := func(_ context.Context, _ string) (bool, error) { return false, nil }
 	post := func(_ context.Context, _, _ string) error { posted = true; return nil }
-	n := reconcileShippedFailures(context.Background(), ownWork(cards), ReconcileDeps{MergedProbe: merged, PostDeployed: post})
+	n := reconcileShippedFailures(context.Background(), ownWork(cards), ReconcileDeps{MergedProbe: merged, PostDeployed: post}, time.Now())
 
 	assert.Equal(t, 0, n)
 	assert.False(t, posted)
@@ -309,7 +309,7 @@ func TestReconcileShippedFailures_NoPRURLSkipped(t *testing.T) {
 	probed := false
 	merged := func(_ context.Context, _ string) (bool, error) { probed = true; return true, nil }
 	post := func(_ context.Context, _, _ string) error { return nil }
-	n := reconcileShippedFailures(context.Background(), ownWork(cards), ReconcileDeps{MergedProbe: merged, PostDeployed: post})
+	n := reconcileShippedFailures(context.Background(), ownWork(cards), ReconcileDeps{MergedProbe: merged, PostDeployed: post}, time.Now())
 
 	assert.Equal(t, 0, n)
 	assert.False(t, probed)
@@ -319,7 +319,7 @@ func TestReconcileShippedFailures_NoPRURLSkipped(t *testing.T) {
 func TestReconcileShippedFailures_NilDepsDisabled(t *testing.T) {
 	cards := []ReconcileCard{{Key: "SC-1", Comments: []tracker.Comment{
 		cmt("[human:deploy-failed]\nx\npr: https://github.com/o/r/pull/7", time.Unix(1, 0))}}}
-	assert.Equal(t, 0, reconcileShippedFailures(context.Background(), ownWork(cards), ReconcileDeps{}))
+	assert.Equal(t, 0, reconcileShippedFailures(context.Background(), ownWork(cards), ReconcileDeps{}, time.Now()))
 }
 
 // liveAgents is the test lister: the set of board agent names currently running
