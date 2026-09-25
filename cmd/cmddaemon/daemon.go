@@ -5257,7 +5257,12 @@ func startSleepInhibitor(ctx context.Context, out io.Writer, logger zerolog.Logg
 // therefore bounded to card.StageRunStartedAt: a stage reaped or crashed before
 // writing anything then finds no entry of its OWN run and shows nothing, rather
 // than the newest leftover entry from a run that never touched this stage
-// (SC-3656 PR review finding).
+// (SC-3656 PR review finding). An ended card that carries no StageRunStartedAt
+// at all — e.g. a launch refused before any agent claimed the ticket, which
+// posts [human:needs-planning] with no started marker to bound against — has no
+// run boundary to read its OWN phase against either, so it is skipped rather
+// than falling back to an unbounded read over the whole ticket-wide scope
+// (SC-3656 PR review finding, round 3).
 func attachActivity(ctx context.Context, reg *daemon.ProjectRegistry, view *daemon.BoardView, logger zerolog.Logger) {
 	if view == nil || len(view.Cards) == 0 {
 		return
@@ -5267,11 +5272,22 @@ func attachActivity(ctx context.Context, reg *daemon.ProjectRegistry, view *daem
 			if !activityShown(card.State) {
 				continue
 			}
+			since := stageRunStartedAt(card)
+			if since.IsZero() && daemon.BoardState(card.State) != daemon.BoardRunning {
+				// An ended card (failed/resolved) with no run boundary has no
+				// stage-started marker to read its OWN phase against — reading
+				// unbounded would borrow whatever an earlier, unrelated stage
+				// left in the same per-ticket scope and assert it as this run's
+				// (SC-3656 PR review finding, round 3). A running card always
+				// carries a boundary (its BoardRunning marker is what makes it
+				// running), so this arm is reached by ended cards only.
+				continue
+			}
 			entries, err := store.List(ctx, boardStateProject(reg, card.Key), card.Key, board.StagePrefix)
 			if err != nil || len(entries) == 0 {
 				continue
 			}
-			phase, at := board.LatestActivity(entries, stageRunStartedAt(card))
+			phase, at := board.LatestActivity(entries, since)
 			if phase == "" {
 				continue
 			}
@@ -5289,8 +5305,9 @@ func attachActivity(ctx context.Context, reg *daemon.ProjectRegistry, view *daem
 
 // stageRunStartedAt parses a card's StageRunStartedAt (RFC3339) into the cutoff
 // LatestActivity bounds its search to. Empty or unparseable yields the zero
-// time — no lower bound — which is the pre-SC-3656 behaviour for a card whose
-// stage carries no started marker to bound against.
+// time — no lower bound — which attachActivity treats as "no boundary to read
+// against" for an ended card and skips (a running card always carries one, so
+// only an ended card without a started marker reaches that arm).
 func stageRunStartedAt(card daemon.BoardViewCard) time.Time {
 	if card.StageRunStartedAt == "" {
 		return time.Time{}

@@ -44,8 +44,16 @@ var boardStages = map[string]bool{
 // phase records accumulate for the ticket's whole life with no clearing path; a
 // stage reaped or crashed before writing anything would otherwise borrow a
 // previous run's phase and assert it, past tense, as its own (SC-3656 PR review
-// finding). Pass the zero time to consider every entry, which a caller with no
-// run boundary to give (a card with no derived stage) falls back to.
+// finding). The zero time considers every entry, unbounded: it is what a
+// caller passes when it has no boundary to give, and it is on the CALLER to
+// decide whether "no boundary" still means something safe to show. For a
+// running card it does — a running card's StageRunStartedAt is never empty,
+// since its BoardRunning marker is what makes it running in the first place.
+// For an ended card with no StageRunStartedAt, unbounded means searching the
+// whole ticket-wide scope with nothing scoping it to this run, which is
+// exactly the borrowed-phase defect above; attachActivity withholds the phase
+// for that case instead of calling this function unbounded (SC-3656 PR review
+// finding, round 3).
 //
 // Empty name means nothing was recorded, which is honest: a run that wrote no
 // phase gets no phase shown rather than an invented one.

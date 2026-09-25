@@ -40,10 +40,15 @@ func TestAttachActivity_RunningCardKeepsItsPhase(t *testing.T) {
 
 // AC2: a run that ended badly (failed) still keeps the phase it reached — the
 // fact survives the failure, and the renderer alone gives it its past tense.
+// The card carries the StageRunStartedAt boundary a real failed card always
+// has (its stage's own "-started" marker); attachActivity has no unbounded
+// fallback for an ended card, so a boundary-less test would no longer exercise
+// this path (SC-3656 PR review finding, round 3).
 func TestAttachActivity_FailedCardKeepsThePhaseItReached(t *testing.T) {
 	isolateState(t)
+	since := time.Now().Format(time.RFC3339Nano)
 	writePhase(t, "SC-1", "verify")
-	view := &daemon.BoardView{Cards: []daemon.BoardViewCard{{Key: "SC-1", State: "failed"}}}
+	view := &daemon.BoardView{Cards: []daemon.BoardViewCard{{Key: "SC-1", State: "failed", StageRunStartedAt: since}}}
 
 	attachActivity(t.Context(), nil, view, zerolog.Nop())
 
@@ -51,11 +56,13 @@ func TestAttachActivity_FailedCardKeepsThePhaseItReached(t *testing.T) {
 }
 
 // AC2: a resolved run (triage concluded no fix needed, or planning found
-// nothing to plan) also keeps the phase it last recorded.
+// nothing to plan) also keeps the phase it last recorded, given the boundary a
+// real resolved card always carries.
 func TestAttachActivity_ResolvedCardKeepsThePhaseItReached(t *testing.T) {
 	isolateState(t)
+	since := time.Now().Format(time.RFC3339Nano)
 	writePhase(t, "SC-1", "triage")
-	view := &daemon.BoardView{Cards: []daemon.BoardViewCard{{Key: "SC-1", State: "resolved"}}}
+	view := &daemon.BoardView{Cards: []daemon.BoardViewCard{{Key: "SC-1", State: "resolved", StageRunStartedAt: since}}}
 
 	attachActivity(t.Context(), nil, view, zerolog.Nop())
 
@@ -65,7 +72,8 @@ func TestAttachActivity_ResolvedCardKeepsThePhaseItReached(t *testing.T) {
 // AC3: nothing is invented. A failed card with no recorded phase is unchanged.
 func TestAttachActivity_FailedCardWithNoRecordedPhaseIsUnchanged(t *testing.T) {
 	isolateState(t)
-	view := &daemon.BoardView{Cards: []daemon.BoardViewCard{{Key: "SC-1", State: "failed"}}}
+	since := time.Now().Format(time.RFC3339Nano)
+	view := &daemon.BoardView{Cards: []daemon.BoardViewCard{{Key: "SC-1", State: "failed", StageRunStartedAt: since}}}
 
 	attachActivity(t.Context(), nil, view, zerolog.Nop())
 
@@ -92,6 +100,27 @@ func TestAttachActivity_FailedCardDoesNotBorrowAnEarlierStagesPhase(t *testing.T
 	attachActivity(t.Context(), nil, view, zerolog.Nop())
 
 	assert.Equal(t, "", view.Cards[0].Activity, "a stage that wrote nothing of its own must not claim an earlier stage's phase")
+	assert.Equal(t, "", view.Cards[0].ActivityAt)
+}
+
+// An ended card with NO StageRunStartedAt — e.g. [human:needs-planning] maps a
+// refused launch straight to (planning, failed) with no planning-started
+// marker ever written — has no run boundary to read its OWN phase against.
+// attachActivity must skip it rather than falling back to an unbounded read
+// over the whole ticket-wide scope, which would surface whatever an earlier,
+// unrelated stage (e.g. a prior autofix round's stage.fix, still within
+// agentstate's 14d retention) left behind and assert it as this run's phase
+// (SC-3656 PR review finding, round 3).
+func TestAttachActivity_EndedCardWithNoBoundaryShowsNoPhase(t *testing.T) {
+	isolateState(t)
+	writePhase(t, "SC-1", "fix") // an earlier, unrelated run's leftover write
+	view := &daemon.BoardView{Cards: []daemon.BoardViewCard{
+		{Key: "SC-1", State: "failed"}, // StageRunStartedAt left empty, as a launch-refused card has it
+	}}
+
+	attachActivity(t.Context(), nil, view, zerolog.Nop())
+
+	assert.Equal(t, "", view.Cards[0].Activity, "an ended card with no run boundary must not borrow an unrelated run's leftover phase")
 	assert.Equal(t, "", view.Cards[0].ActivityAt)
 }
 

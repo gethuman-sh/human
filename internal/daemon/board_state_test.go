@@ -502,8 +502,10 @@ func TestDeriveBoardCard_stageRunStartedAt_trackedLatestOfSeveralRestarts(t *tes
 }
 
 // A card with no started marker at all (e.g. only a plan-ready) carries no run
-// boundary — board.LatestActivity then falls back to considering every entry,
-// today's pre-SC-3656 behaviour.
+// boundary. For a card in a state that shows a phase at all, attachActivity
+// treats that as nothing to read against rather than falling back to an
+// unbounded search of the whole ticket-wide scope (SC-3656 PR review finding,
+// round 3).
 func TestDeriveBoardCard_stageRunStartedAt_zeroWithNoStartedMarker(t *testing.T) {
 	card := DeriveBoardCard([]tracker.Comment{
 		cmt("[human:plan-ready]", time.Unix(5000, 0)),
