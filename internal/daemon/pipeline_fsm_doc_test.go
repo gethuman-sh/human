@@ -246,4 +246,21 @@ func TestPipelineFSM_PlanningTransitionsNameTheFixClassification(t *testing.T) {
 
 	assert.Contains(t, byName["start-fix-run"].src, "nothing-to-do",
 		"re-opening a nothing-to-do on a bug resumes the fix pipeline")
+
+	// A guard that can fail leaves the item somewhere, and the document has to
+	// say where: every state a classified planning transition may start from
+	// must also start a fix-resuming transition, or the machine describes only
+	// the feature half of a fork the code takes both ways (SC-5793).
+	resumeSrc := map[string]bool{}
+	for _, name := range []string{"start-fix-run", "fix-resumed-instead-of-planning"} {
+		for _, s := range byName[name].src {
+			resumeSrc[s] = true
+		}
+	}
+	for _, name := range []string{"start-planning", "reopen-planning"} {
+		for _, s := range byName[name].src {
+			assert.True(t, resumeSrc[s],
+				"%s may start from %q, but no fix-resuming transition does: the classification's other branch is undescribed", name, s)
+		}
+	}
 }

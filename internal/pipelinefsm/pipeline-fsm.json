@@ -537,6 +537,7 @@
       "src": [
         "filed",
         "ticket-reviewed",
+        "planned",
         "stopped",
         "substrate-down",
         "queued",
@@ -547,7 +548,7 @@
       "runs": "human-autofix",
       "marker": "[human:implementation-started]",
       "where": "board_transition.go ApplyFix; board_options.go launchDecidedStage → launchFixPipeline when the stage was queued by a decision",
-      "doc": "Dropping a bug on Fix. The run is self-planning — it produces its own plan rather than requiring one. A person re-opening a [human:nothing-to-do] on a bug reaches the same dispatch: reopenResolved classifies and the fix pipeline resumes (SC-5793)."
+      "doc": "Dropping a bug on Fix. The run is self-planning — it produces its own plan rather than requiring one. A person re-opening a [human:nothing-to-do] on a bug reaches the same dispatch: reopenResolved classifies and the fix pipeline resumes (SC-5793). A bug that already carries a plan and is dropped on Planning again lands here too: ticket kind is authoritative over plan evidence, so start-planning's guard sends it to the fix run rather than to the feature planner (SC-5793)."
     },
     {
       "name": "preflight-clear",
