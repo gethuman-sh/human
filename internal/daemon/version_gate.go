@@ -82,7 +82,7 @@ func semverLess(a, b [3]int) bool {
 // the daemon↔client wire — new routes, new request fields, changed semantics —
 // additive or breaking alike. MinProtocol moves only for breaking changes.
 // Every bump gets a line in docs/protocol.md so the decision is auditable.
-const Protocol = 9
+const Protocol = 10
 
 // MinProtocol is the oldest client protocol this daemon still serves. Raising
 // it is the CONSCIOUS compatibility decision: the author of a breaking wire
