@@ -130,7 +130,7 @@ func TestAdvanceDeployFix_doneBeforeReview_launchesReviewerNotDeploy(t *testing.
 	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/7", Number: 7}}
 	deps := newDeps(c, l, p)
 
-	require.NoError(t, deps.AdvanceDeployFix(context.Background(), "SC-1", ExitDone, Blocker{}))
+	require.NoError(t, deps.AdvanceDeployFix(context.Background(), "SC-1", DeployFixReport{Exit: ExitDone}))
 
 	assert.Equal(t, 0, p.merged, "a pre-review fixer's done exit does not merge")
 	assert.Equal(t, 1, p.publishCalls, "the fixer's resolution is still published")
@@ -160,7 +160,7 @@ func TestAdvanceDeployFix_doneBeforeFirstReview_recoversPRBindingFromDeployFixMa
 	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/7", Number: 7}}
 	deps := newDeps(c, l, p)
 
-	require.NoError(t, deps.AdvanceDeployFix(context.Background(), "SC-1", ExitDone, Blocker{}))
+	require.NoError(t, deps.AdvanceDeployFix(context.Background(), "SC-1", DeployFixReport{Exit: ExitDone}))
 
 	assert.Equal(t, 1, countPosted(c, PRReviewStartedHeader), "the reviewer is launched on the resolved branch")
 	assert.Equal(t, "/human-pr-review SC-1 --pr=7 --branch=feat/x", l.prompt, "PR #0 is never dispatched")

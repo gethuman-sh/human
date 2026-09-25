@@ -130,9 +130,9 @@ func TestAdvanceDeployFix_escalationCarriesTheFixersBlocker(t *testing.T) {
 	}}
 	deps := newDeps(c, &fakeLauncher{}, &fakeDeployer{})
 
-	require.NoError(t, deps.AdvanceDeployFix(context.Background(), "SC-1", ExitNeedsHumanWork, Blocker{
+	require.NoError(t, deps.AdvanceDeployFix(context.Background(), "SC-1", DeployFixReport{Exit: ExitNeedsHumanWork, Blocker: Blocker{
 		Kind: "conflicting-requirements", Evidence: "main_test.go:12 pins the old body", Attempted: "rebased; ran the suite", Release: "a person decides which contract wins",
-	}))
+	}}))
 
 	failed, ok := posted(c, DeployFailedHeader)
 	require.True(t, ok)
@@ -156,9 +156,9 @@ func TestAdvanceDeployFix_escalationCoercesAnInvalidBlockerKind(t *testing.T) {
 	}}
 	deps := newDeps(c, &fakeLauncher{}, &fakeDeployer{})
 
-	require.NoError(t, deps.AdvanceDeployFix(context.Background(), "SC-1", ExitNeedsHumanWork, Blocker{
+	require.NoError(t, deps.AdvanceDeployFix(context.Background(), "SC-1", DeployFixReport{Exit: ExitNeedsHumanWork, Blocker: Blocker{
 		Kind: "made-up-kind", Evidence: "e", Attempted: "a", Release: "r",
-	}))
+	}}))
 
 	failed, ok := posted(c, DeployFailedHeader)
 	require.True(t, ok)
