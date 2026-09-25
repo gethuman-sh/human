@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -219,26 +220,33 @@ func TestAdvancePRLoop_redriveStandsDownWhileTheStepsAgentIsAlive(t *testing.T) 
 		{Body: "[human:pr-fix-started]", ID: "3", Created: base.Add(2 * time.Second)},
 	}
 	for _, tc := range []struct {
-		name      string
-		alive     bool
-		agent     string
-		fixStale  bool
-		escalates bool
+		name       string
+		aliveNames []string
+		agent      string
+		fixStale   bool
+		escalates  bool
+		asked      []string
 	}{
-		{"re-drive, fixer alive", true, "", false, false},
-		{"re-drive, fixer gone", false, "", false, true},
-		{"the fixer's own exit event", true, "board-SC-1-prfix", false, true},
+		{"re-drive, fixer alive", []string{"board-SC-1-prfix"}, "", false, false, []string{"board-SC-1-prfix"}},
+		{"re-drive, fixer gone", nil, "", false, true, []string{"board-SC-1-prfix", "board-SC-1-deployfix"}},
+		{"the fixer's own exit event", []string{"board-SC-1-prfix"}, "board-SC-1-prfix", false, true, nil},
 		// A prior round's FixRecorded/FixStale leftover must not read as THIS
 		// round's step already having reported in: stepRecorded alone stays
 		// true forever once round 1 writes it, so from round 2 on only the
 		// staleness check tells a live fixer apart from a finished one (SC-5120).
-		{"re-drive, prior round's stale fix record, fixer alive", true, "", true, false},
+		{"re-drive, prior round's stale fix record, fixer alive", []string{"board-SC-1-prfix"}, "", true, false, []string{"board-SC-1-prfix"}},
+		// SC-5591: the done stage's third agent. No loop marker names it, so the
+		// half the thread names is gone while the card is still owned.
+		{"re-drive, only the deploy fixer alive", []string{"board-SC-1-deployfix"}, "", false, false, []string{"board-SC-1-prfix", "board-SC-1-deployfix"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := &fakeCommenter{comments: thread}
 			var asked []string
 			deps := newDeps(c, &fakeLauncher{}, &fakeDeployer{})
-			deps.LoopStepAlive = func(name string) bool { asked = append(asked, name); return tc.alive }
+			deps.LoopStepAlive = func(name string) bool {
+				asked = append(asked, name)
+				return slices.Contains(tc.aliveNames, name)
+			}
 
 			require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1",
 				PRLoopOutcome{
@@ -248,11 +256,35 @@ func TestAdvancePRLoop_redriveStandsDownWhileTheStepsAgentIsAlive(t *testing.T) 
 
 			_, failed := posted(c, PRReviewFailedHeader)
 			assert.Equal(t, tc.escalates, failed)
-			if tc.agent == "" {
-				assert.Equal(t, []string{"board-SC-1-prfix"}, asked, "the re-drive asks about the step the fresh thread names")
-			} else {
-				assert.Empty(t, asked, "an exit event needs no probe")
-			}
+			assert.Equal(t, tc.asked, asked)
 		})
 	}
+}
+
+// SC-5591, the drive side: the merge that dispatched the deploy fixer runs
+// inside the APPROVED review's own drive, so the thread's newest loop marker
+// still names the review and its recorded verdict satisfies stepRecorded. A
+// re-drive therefore skipped the liveness probe entirely and went straight back
+// to PRActionMerge — against the branch the fixer was mid-rebase on.
+func TestAdvancePRLoop_redriveDoesNotMergeOverALiveDeployFixer(t *testing.T) {
+	c := &fakeCommenter{comments: approvedLoopThread()}
+	p := &fakeDeployer{res: PRResult{Number: 7, URL: "u"}, checks: []forge.ChecksState{forge.ChecksPassing}, mergeable: true}
+	var asked []string
+	deps := newDeps(c, &fakeLauncher{}, p)
+	deps.LoopStepAlive = func(name string) bool {
+		asked = append(asked, name)
+		return name == agentNameFor("SC-1", deployFixAgentStage)
+	}
+
+	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1",
+		PRLoopOutcome{ReviewVerdict: PRVerdictApproved, ReviewRecorded: true}))
+
+	assert.Zero(t, p.merged, "the fixer owns the branch; a second merge races its rebase")
+	assert.Zero(t, p.markReadyCall)
+	_, passed := posted(c, PRReviewPassedHeader)
+	assert.False(t, passed, "nothing converged — the drive stood down")
+	_, failed := posted(c, DeployFailedHeader)
+	assert.False(t, failed, "and nothing failed")
+	assert.Equal(t, []string{"board-SC-1-deployfix"}, asked,
+		"an approved review's record short-circuits the half probe, so the deployfix probe must sit outside it")
 }

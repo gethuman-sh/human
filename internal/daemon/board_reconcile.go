@@ -531,6 +531,8 @@ func recordedDeath(deps ReconcileDeps, names []string, alive map[string]struct{}
 // Stop event). driveLoop re-reads the recorded state and advances or escalates,
 // idempotently (AdvancePRLoop's escalate no-ops on an already-open options
 // block, and the alive-guard prevents racing a second launch). nil deps disable it.
+// The alive-guard is the done stage's three-agent join (stageAgentNames), not
+// the loop's two halves (SC-5591).
 //
 // It receives DrivableCards from the forTAKEOVER gate, not forReview. A
 // mid-flight review→fix loop is a RUNNING stage, and the gate's two intents split
@@ -570,12 +572,13 @@ func reconcilePRLoops(ctx context.Context, drivable DrivableCards, deps Reconcil
 		if !doneStageLoopActive(card.Comments) {
 			continue
 		}
-		// A live loop half-agent owns the card — leave it; re-driving would race a
-		// second launch onto the same step.
-		if _, ok := alive[agentNameFor(card.Key, prReviewAgentStage)]; ok {
-			continue
-		}
-		if _, ok := alive[agentNameFor(card.Key, prFixAgentStage)]; ok {
+		// A live done-stage agent owns the card — leave it; re-driving would race
+		// a second launch onto the same step. Every agent the stage can run under
+		// is asked, not just the two loop halves: the deploy fixer posts no loop
+		// marker of its own, so a card the thread still shows mid-loop can be owned
+		// by board-<key>-deployfix, and re-driving it re-ran the merge against the
+		// branch that fixer was rebasing (SC-5591, the site SC-5396 missed).
+		if _, ok := liveStageAgent(alive, card.Key, BoardDoneStage); ok {
 			continue
 		}
 		if err := deps.DriveLoop(card.Key); err != nil {
