@@ -106,6 +106,10 @@ type LiveAgentLister func() ([]string, error)
 // FailedMarkerPoster posts a free-form *-failed marker body on the PM ticket,
 // moving the card to a failed/needs-attention badge whose first body line is
 // the headline. A nil poster disables the stuck-running pass.
+//
+// Two bodies it carries are deliberately not failures — the run-cancelled
+// record (board_reconcile_orphan.go) and the completed planning handoff
+// (SC-5090). The name records the ordinary case, not a restriction.
 type FailedMarkerPoster func(ctx context.Context, pmKey, body string) error
 
 // ChainReview starts the review stage for a card whose build finished and
@@ -755,6 +759,94 @@ func reconcileStuckRunning(ctx context.Context, drivable DrivableCards, deps Rec
 	return reddened
 }
 
+// stuckCardLivenessVerdict decides whether a candidate card is dead enough to
+// act on, and how it died: proceed reports that the pass may act, silenced that
+// a LIVE agent was judged hung and stopped by this pass (uncharged), and reap
+// carries what was observed. Extracted from reconcileOneStuckCard so the two
+// clocks (recorded death, the stuck grace) and the hung-agent probe cost their
+// own function rather than that one's complexity budget.
+func stuckCardLivenessVerdict(card ReconcileCard, derived BoardCard, alive map[string]struct{}, deps ReconcileDeps, now time.Time) (proceed, silenced bool, reap SilenceReap) {
+	logger := deps.Logger
+	// While THIS machine's deploy engine is actively running this card
+	// (deployRunQueued..deployRunFinished), the CI-gate/merge window runs no
+	// board agent at all — the sub-agent that owned the PREVIOUS phase (the
+	// reviewer that approved, the deploy fixer that resolved its conflict) has
+	// already exited normally, and that ordinary exit is recorded as a stop
+	// after StageEnteredAt exactly like a real death is. recordedDeath cannot
+	// tell the two apart from the stop record alone, so it must not be
+	// consulted here: this window's only clock is stuckPastGrace's
+	// DeployRunProbe branch below, which already accounts for the CI gate's
+	// own timeout (SC-5396).
+	died, at := false, time.Time{}
+	if !deployEngineActive(deps.DeployRun, card.Key) {
+		died, at = recordedDeath(deps, stageAgentNames(card.Key, derived.Stage), alive, derived.StageEnteredAt)
+	}
+	if died {
+		// The manager already recorded this stage's agent as stopped after the
+		// stage began, and nothing handled the exit (the card is still running).
+		// That is a death the machine has evidence for, so waiting out a grace
+		// meant for silence would spend fifteen minutes on a fact it already
+		// holds — measured on a killed implementation agent in the campaign
+		// (SC-5327). It falls through to the vanished-agent path below unchanged.
+		logger.Warn().Str("pm", card.Key).Str("stage", string(derived.Stage)).
+			Time("stopped_at", at).Msg("board reconcile: agent recorded as stopped during this stage, skipping the stuck grace")
+	} else if !stuckPastGrace(derived, card, deps.DeployRun, now) {
+		// Young enough to still be genuine in-flight work.
+		return false, false, SilenceReap{}
+	}
+	// silenced marks a stop THIS pass chose because a live agent stopped
+	// making progress — a machine-chosen stop, not a stage failure, so it
+	// must not consume the ticket's retry budget (SC-2447). A vanished
+	// agent (no entry in alive) is a genuine, unexplained death and stays
+	// on the charged path unchanged.
+	if liveName, isLive := liveStageAgent(alive, card.Key, derived.Stage); isLive {
+		// hungLiveAgent is handed the name that is actually alive, so the
+		// progress probe asks about the right container (SC-5396).
+		return hungLiveAgent(deps, liveName, now, card.Key, derived.Stage)
+	}
+	return true, false, SilenceReap{}
+}
+
+// completeStrandedPlanHandoff is the durable twin of the live watcher's
+// completePlanningHandoff: a planning card whose plan is attached and whose
+// handoff never landed is completed, not reddened. Reached only when the live
+// watcher missed the exit — a daemon restart, a dropped hook — and only AFTER
+// the liveness verdict, so a planner still alive and about to post its own
+// handoff is never raced.
+//
+// Every clean-ending guard the live path honours needs its twin here; the
+// asymmetry is what let this defect class recur twelve times in one night
+// (SC-3149, and see stuckCardIsOursToRed). Posts through PostFailed, which is
+// already how a non-failure body reaches the ticket from this pass
+// (RunCancelledBody, board_reconcile_orphan.go).
+//
+// silenced and reap are the liveness verdict's own judgement (stuckCardLivenessVerdict):
+// silenced true means THIS pass found the agent still alive, judged it hung
+// and stopped it via hungLiveAgent — the run did not exit on its own. Posting
+// the ordinary body in that case would misstate what happened and, because
+// this completion returns before stuckRunningSilenceBody ever runs, would
+// drop the stop from the record entirely — the exact trail SC-2447/SC-3074
+// require. Word it for a reaped run and carry the observation along instead
+// of silently losing it (SC-5090).
+func completeStrandedPlanHandoff(ctx context.Context, card ReconcileCard, derived BoardCard, deps ReconcileDeps, silenced bool, reap SilenceReap) bool {
+	if derived.Stage != BoardPlanning || !planAttachedAfterStart(card.Comments) {
+		return false
+	}
+	body := planHandoffCompletedBody()
+	logMsg := "board reconcile: planning card carries a plan newer than its start and no handoff; posted the handoff on the dead run's behalf"
+	if silenced {
+		body = planHandoffCompletedReapedBody(reap)
+		logMsg = "board reconcile: planning card's agent was still live but silence-reaped by this pass; posted the handoff on the reaped run's behalf"
+	}
+	if err := deps.PostFailed(ctx, card.Key, body); err != nil {
+		deps.Logger.Warn().Err(err).Str("pm", card.Key).
+			Msg("board reconcile: cannot complete the planning handoff; falling through to the stuck-running red")
+		return false
+	}
+	deps.Logger.Info().Str("pm", card.Key).Msg(logMsg)
+	return true
+}
+
 // reconcileOneStuckCard applies the stuck-running judgement to a single card
 // and reports whether it was reddened. Split out of reconcileStuckRunning so
 // that function's per-card branching costs its own function rather than the
@@ -769,50 +861,14 @@ func reconcileOneStuckCard(ctx context.Context, card ReconcileCard, alive map[st
 	if failedType == "" {
 		return false
 	}
-	names := stageAgentNames(card.Key, derived.Stage)
-	liveName, isLive := liveStageAgent(alive, card.Key, derived.Stage)
-	// While THIS machine's deploy engine is actively running this card
-	// (deployRunQueued..deployRunFinished), the CI-gate/merge window runs no
-	// board agent at all — the sub-agent that owned the PREVIOUS phase (the
-	// reviewer that approved, the deploy fixer that resolved its conflict) has
-	// already exited normally, and that ordinary exit is recorded as a stop
-	// after StageEnteredAt exactly like a real death is. recordedDeath cannot
-	// tell the two apart from the stop record alone, so it must not be
-	// consulted here: this window's only clock is stuckPastGrace's
-	// DeployRunProbe branch below, which already accounts for the CI gate's
-	// own timeout (SC-5396).
-	died, at := false, time.Time{}
-	if !deployEngineActive(deps.DeployRun, card.Key) {
-		died, at = recordedDeath(deps, names, alive, derived.StageEnteredAt)
-	}
-	if died {
-		// The manager already recorded this stage's agent as stopped after the
-		// stage began, and nothing handled the exit (the card is still running).
-		// That is a death the machine has evidence for, so waiting out a grace
-		// meant for silence would spend fifteen minutes on a fact it already
-		// holds — measured on a killed implementation agent in the campaign
-		// (SC-5327). It falls through to the vanished-agent path below unchanged.
-		logger.Warn().Str("pm", card.Key).Str("stage", string(derived.Stage)).
-			Time("stopped_at", at).Msg("board reconcile: agent recorded as stopped during this stage, skipping the stuck grace")
-	} else if !stuckPastGrace(derived, card, deps.DeployRun, now) {
-		// Young enough to still be genuine in-flight work.
+	proceed, silenced, reap := stuckCardLivenessVerdict(card, derived, alive, deps, now)
+	if !proceed {
 		return false
 	}
-	// silenced marks a stop THIS pass chose because a live agent stopped
-	// making progress — a machine-chosen stop, not a stage failure, so it
-	// must not consume the ticket's retry budget (SC-2447). A vanished
-	// agent (no entry in alive) is a genuine, unexplained death and stays
-	// on the charged path unchanged.
-	var silenced bool
-	var reap SilenceReap
-	if isLive {
-		// hungLiveAgent is handed the name that is actually alive, so the
-		// progress probe asks about the right container (SC-5396).
-		proceed, s, r := hungLiveAgent(deps, liveName, now, card.Key, derived.Stage)
-		if !proceed {
-			return false
-		}
-		silenced, reap = s, r
+	// A planning run that attached its plan before dying produced what the next
+	// stage needs; redding it would re-plan an attached plan (SC-5090).
+	if completeStrandedPlanHandoff(ctx, card, derived, deps, silenced, reap) {
+		return false
 	}
 	// Repeated silence reaps are bounded and visible, identically to the live
 	// failure watcher's cap (SC-3074): at or over MaxSilenceReaps this stops

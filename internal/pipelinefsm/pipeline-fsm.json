@@ -94,7 +94,8 @@
         "skill",
         "daemon"
       ],
-      "inherits": "planning"
+      "inherits": "planning",
+      "note": "One exception to the recovery rule: a run that attached its plan before dying is not redded. Both the live exit watcher and the durable pass post the handoff on its behalf and the item moves to planned (plan-handoff-completed). It applies only where the plan is on the TICKET — in split topology the plan is an engineering ticket the daemon never saw created, so nothing here can complete it."
     },
     {
       "name": "planned",
@@ -495,6 +496,17 @@
       "where": "internal/claude/embed/human-plan-skill.md posts plan-ready as its last step, whether or not the board dispatched it"
     },
     {
+      "name": "plan-handoff-completed",
+      "src": [
+        "planning"
+      ],
+      "dst": "planned",
+      "actor": "daemon",
+      "marker": "[human:plan-ready]",
+      "where": "internal/daemon/board_failure.go completePlanningHandoff, from handleCleanStageEnding on the run's exit; internal/daemon/board_reconcile.go completeStrandedPlanHandoff is the durable twin for a lost exit event",
+      "doc": "The planning handoff is two tracker writes — the plan, then plan-ready — and a run that died between them left the deliverable the next stage needs already attached. The daemon posts the handoff on the dead run's behalf rather than redding the card and re-planning an attached plan (SC-5090). Recognized by a [human:plan] comment newer than the stage's newest planning-started; the marker carries no engineering: field, so single-tracker topology only. Posting it, not merely suppressing the failure, is what moves the item: a suppressed failure leaves a card running behind a dead agent. Declines — leaving the item in `stopped` — when the stage's own newest marker is already its own planning-failed: that is a decision the run made about the ticket (the exit-contract's needs-human-work instruction), never overwritten by a handoff synthesized from the plan comment, which is also why src lists only `planning` and never `stopped`. Reached too for a silence reap (a live agent judged hung and stopped by this pass, or the zombie sweep's synthesized exit) — the body then says the run was stopped rather than exited, and the SC-2447/SC-3074 idle/budget/outstanding observation rides along as marker fields so the reap is not lost by the completion."
+    },
+    {
       "name": "plan-finds-nothing-to-do",
       "src": [
         "planning",
@@ -516,7 +528,7 @@
       "actor": "daemon",
       "marker": "[human:planning-failed]",
       "where": "board_failure.go — guarded by stageAlreadyFailed (SC-3857): a stage already failed with no relaunch since does not re-post, but the automatic in-place relaunch still runs (deps.Retry.tryRelaunch reads the stage's own recorded exit, not the marker thread)",
-      "doc": "The planning stage itself failed — a spent retry budget, an agent that died without a verdict. Distinct from the planner concluding there is nothing to do, which is a terminal rather than a fault and must never be reddened as one. Fires at most once per ending: a second exit event for the same dead run is absorbed (SC-3857)."
+      "doc": "The planning stage itself failed — a spent retry budget, an agent that died without a verdict. Distinct from the planner concluding there is nothing to do, which is a terminal rather than a fault and must never be reddened as one. Fires at most once per ending: a second exit event for the same dead run is absorbed (SC-3857). Also distinct from a run that died having already attached its plan, which is completed rather than reddened (plan-handoff-completed)."
     },
     {
       "name": "start-fix-run",

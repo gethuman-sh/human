@@ -273,6 +273,19 @@ A stop that fails, or a `stopAgent` that is unwired, leaves the card alone. So
 does an agent the progress probe does not know about: killing live work on absent
 evidence is the one failure this must never risk.
 
+**Exception: a planning card whose plan is already attached.**
+`completeStrandedPlanHandoff` (`internal/daemon/board_reconcile.go`) runs right
+after the liveness verdict above and, for the planning stage with a
+`[human:plan]` newer than its `[human:planning-started]`, posts the
+`[human:plan-ready]` handoff on the stopped run's behalf instead of reddening
+the card — the deliverable the next stage needs is already on the ticket, so
+redding it would only re-plan what is already planned (SC-5090). The stop
+itself is not silently dropped even though the card is not reddened: the
+completion is worded for a reaped run rather than an exited one, and the same
+idle/budget/outstanding observation `stuckRunningSilenceBody` would have
+recorded rides along as fields on that same `plan-ready` marker (SC-2447/
+SC-3074's trail requirement).
+
 ### 6. Reconcile — stuck-running card, agent vanished
 
 Same pass, same preconditions, but no agent for `(key, stage)` is alive at all —
@@ -280,7 +293,12 @@ for the done stage, none of `board-<key>-prreview`, `board-<key>-prfix`,
 `board-<key>-deployfix`. Nothing is reaped here — the container is already gone. This is the fallback for
 a death the live failure watcher missed (a daemon restart, a dropped event), and
 unlike § 5 it is a genuine unexplained death, so it reds the card and relaunches
-on the **charged** path.
+on the **charged** path — with the same planning exception as § 5:
+`completeStrandedPlanHandoff` runs ahead of the reddening here too, so a
+vanished planning agent whose plan is attached is completed, not reddened
+(SC-5090). Because the run genuinely vanished rather than being stopped by
+this pass, the completion here uses the ordinary "exited before posting this
+handoff" wording — there is no stop observation to carry.
 
 The deploy grace above applies here too — a `human deploy` on its CI gate has
 *no* agent by construction, so a vanished agent is not evidence a deploy is dead
@@ -411,6 +429,18 @@ Collected in one place, because the spares are the load-bearing part:
   in-flight count means nothing. Absent evidence still gets `WorkingIdleGrace`
   (30 minutes), not `IdleGrace` (3); it is reaped later on continued silence,
   never on the short budget (SC-3853).
+- **A planning card whose plan is already attached** (newer than the stage's
+  `[human:planning-started]`), whether its agent is still live and judged hung
+  (§ 5) or has vanished outright (§ 6): `completeStrandedPlanHandoff` posts the
+  `[human:plan-ready]` handoff on the run's behalf instead of reddening the
+  card, so the deliverable already on the ticket is not thrown away by a
+  re-plan (SC-5090). The live watcher's twin, `completePlanningHandoff`
+  (`internal/daemon/board_failure.go`), is the same spare reached from a real
+  exit event rather than this pass — including one the zombie sweep
+  synthesizes for a silence reap (§ 4) — but it declines when the stage's own
+  newest marker is already its own `*-failed` header: a planner that attached
+  its plan and then deliberately posted its own failure is a decision about
+  the ticket, not an incomplete stage to complete over.
 - **A card with an open `[human:options]` block** for its own or an earlier stage.
 - **A card in an active PR review→fix loop**, whose half-agents legitimately come
   and go between rounds.

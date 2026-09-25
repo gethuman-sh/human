@@ -141,7 +141,12 @@ After finalizing the plan, review it yourself end-to-end:
 
 Only proceed to ticket creation once you are confident the plan will work.
 
-## Phase 5: Attach the plan (topology decides where)
+## Phase 5: Attach the plan and post the handoff (topology decides where)
+
+Two writes, one step. Post the handoff as the **very next command** after the
+plan — before any verification, before the state record, before reporting
+anything. A step between them is a place a run can stop, and the handoff is
+what finishes a planning run.
 
 Run `human tracker topology`:
 
@@ -163,25 +168,7 @@ PLAN_EOF
 
 After creating the ticket, capture the returned engineering ticket key and update the ticket description so the `**Engineering ticket**:` line in the plan header contains the actual key (replacing `TBD`). This gives the executor both the PM and engineering ticket keys from the plan header so every commit can reference both.
 
-Then fetch the ticket back and verify the description matches the updated plan content byte-for-byte. If it does not match, update the ticket until it does.
-
-### Phase 5b: Single-tracker topology — attach the plan as a comment
-
-Post the plan verbatim as a `[human:plan]` marker comment on the PM ticket (the ticket description stays product language; the plan is a stage artifact and lives in the comment stream):
-
-```bash
-human marker post <PM_KEY> plan --body-file - <<'PLAN_EOF'
-<FINAL_PLAN_CONTENT>
-PLAN_EOF
-```
-
-Verify with `human plan show <PM_KEY>` — it must print the plan back. Re-planning posts a new `[human:plan]` comment; the latest wins, never edit old ones. In this topology the plan header needs no `**Engineering ticket**:` line, and commits reference only the PM key.
-
-## Phase 6: Post the plan-ready marker on the PM ticket
-
-Post a structured marker comment on the **PM ticket** so the workflow board can advance the card from Planning into Implementation. The format is fixed so it can be parsed unambiguously across trackers:
-
-- Split topology (engineering ticket created):
+Then fetch the ticket back and verify the description matches the updated plan content byte-for-byte. If it does not match, update the ticket until it does. Once it matches, post the handoff immediately as the last action of this phase:
 
 ```bash
 human marker post <PM_KEY> plan-ready --field engineering=<ENG_KEY>
@@ -194,23 +181,46 @@ which renders as:
 engineering: <ENG_KEY>
 ```
 
-- Single-tracker topology (plan attached as comment) — no `engineering:` field; the board dispatches Implementation on the PM key itself:
+### Phase 5b: Single-tracker topology — attach the plan as a comment, then the handoff
+
+Post the plan verbatim as a `[human:plan]` marker comment on the PM ticket (the ticket description stays product language; the plan is a stage artifact and lives in the comment stream), then post the handoff as the very next command — no step between them:
 
 ```bash
+human marker post <PM_KEY> plan --body-file - <<'PLAN_EOF'
+<FINAL_PLAN_CONTENT>
+PLAN_EOF
 human marker post <PM_KEY> plan-ready
 ```
 
-`<PM_KEY>` is the original PM ticket key from the plan's `**PM ticket**:` header. This mirrors the `[human:ready-for-review]` handoff that `human-executor` posts after implementation.
+In this topology the plan header needs no `**Engineering ticket**:` line, and commits reference only the PM key — no `engineering:` field on the handoff either; the board dispatches Implementation on the PM key itself. `<PM_KEY>` is the original PM ticket key from the plan's `**PM ticket**:` header. This mirrors the `[human:ready-for-review]` handoff that `human-executor` posts after implementation.
+
+## Phase 6: Confirm both landed
+
+Verify both writes landed before doing anything else — verification, state records, reporting. Which check verifies the plan write depends on topology, same as Phase 5:
+
+- **Single-tracker topology** — the plan is the `[human:plan]` comment from Phase 5b:
+
+  ```bash
+  human plan show <PM_KEY>                      # must print the plan back
+  human marker list <PM_KEY> | grep plan-ready  # must print the handoff
+  ```
+
+  Re-planning posts a new `[human:plan]` comment; the latest wins, never edit old ones.
+
+- **Split topology** — there is no `[human:plan]` comment on the PM ticket; the plan is the engineering ticket's description, and `human plan show <PM_KEY>` finds nothing to print and fails. The verification that applies here is Phase 5a's byte-for-byte description check, already done before the handoff was posted:
+
+  ```bash
+  human marker list <PM_KEY> | grep plan-ready  # must print the handoff
+  ```
 
 **This marker is what finishes a planning run.** Attaching the plan in Phase 5
 does not advance the card and neither does any state record — a plan comment is
-content, not a stage signal. A run that attaches a plan and stops here exits 0,
-looks successful in its own summary, and still reddens the card as a crash.
-Verify it landed before reporting anything:
-
-```bash
-human marker list <PM_KEY> | grep plan-ready
-```
+content, not a stage signal. Post it yourself, every time. The daemon will
+complete a handoff for a run that attached its plan and then died before
+posting it, but that is a repair, not the protocol: it posts no
+`engineering:` field, so it cannot cover split topology, and a run that could
+have posted its own handoff and did not has left the trail saying a machine
+finished its work.
 
 ## Retry budgets, flakes, and how this run may end
 
@@ -240,12 +250,9 @@ EOF
 
 **This state record is NOT the stage handoff, and writing it does not finish the
 run.** The board never reads agent state to advance a card — only the
-`[human:plan-ready]` marker from Phase 6 does that. Writing `exit: done` here
-while that marker is missing is the one combination that strands a card: the
-plan is attached and correct, the run exits 0, and the board still reads a crash
-and reddens it. If you have written this and not yet posted the Phase 6 marker,
-**go back and post it now** — that, not this record, is the last act of a
-planning run.
+`[human:plan-ready]` marker does that. If you have written this and not yet
+posted the marker, go back and post it now — that, not this record, is the last
+act of a planning run.
 
 <!-- human:include dependents -->
 
