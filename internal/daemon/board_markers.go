@@ -198,7 +198,8 @@ const (
 	// DeployFixStartedHeader marks the deploy stage's automated fixer sub-phase
 	// (SC-1557): a CI failure or rebase conflict at the deploy gate dispatches the
 	// human-deploy-fixer instead of redding, so this reads as the done stage running.
-	// Each occurrence is one deploy-fix round — the budget counts them (deployFixRounds).
+	// Each occurrence is one deploy-fix round — the budget counts them (deployFixRounds),
+	// except one followed by a deploy-outage: an outage exit is refunded, not charged.
 	DeployFixStartedHeader = "[human:" + MarkerDeployFixStarted + "]"
 
 	// Outage markers are the NON-failing transient twin of the *-failed headers,

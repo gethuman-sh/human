@@ -1875,7 +1875,13 @@ func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string,
 // SC-2851). summary is the fixer's own line, so the card names what was
 // unreachable instead of the generic fallback.
 func (d BoardTransitionDeps) deployFixOutage(ctx context.Context, pmKey string, comments []tracker.Comment, summary string) error {
-	body := markerBody(pausedOutageMarker(outageTypeFor(BoardDoneStage), nil, "", "", strings.TrimSpace(summary)))
+	// The fixer's summary is agent-authored free text and the template's "one
+	// line" is not enforced: collapsed to a single line (not just the first)
+	// so a multi-line summary neither duplicates itself into the composed
+	// sentence nor lets a "resume:" line ride along and get scanned by
+	// parseResumeLine as the marker's own field (SC-5592).
+	reason := strings.Join(strings.Fields(summary), " ")
+	body := markerBody(pausedOutageMarker(outageTypeFor(BoardDoneStage), nil, "", "", reason))
 	if outageAlreadyStated(comments, BoardDoneStage, body) {
 		d.Logger.Info().Str("pm", pmKey).
 			Msg("board deploy fix: the card already says the substrate is down, not repeating it")

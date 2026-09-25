@@ -2202,7 +2202,7 @@ func TestAdvanceDeployFix_PublishFails_RedsWithoutDeploying(t *testing.T) {
 // left nothing publishable, and publishing on its behalf would ship whatever
 // half-finished state its branch happens to hold.
 func TestAdvanceDeployFix_NonDoneExit_PublishesNothing(t *testing.T) {
-	for _, exit := range []StageExit{ExitNeedsInput, ExitNeedsHumanWork, ""} {
+	for _, exit := range []StageExit{ExitNeedsInput, ExitNeedsHumanWork, ExitOutage, ""} {
 		c := &fakeCommenter{comments: deployFixReadyComments()}
 		p := &fakeDeployer{}
 		deps := newDeps(c, &fakeLauncher{}, p)

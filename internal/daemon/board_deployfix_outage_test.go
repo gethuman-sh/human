@@ -146,6 +146,31 @@ func TestAdvanceDeployFix_Outage_OntoAnAlreadyFailedDoneStagePostsNothing(t *tes
 	assert.Empty(t, c.added, "a red another actor owns must not be flipped back to waiting")
 }
 
+// The fixer's summary is agent-authored free text and the "<one line>" the
+// template asks for is not enforced. A multi-line summary must neither
+// duplicate itself into the composed sentence nor let a line that happens to
+// start with "resume:" be scanned as the marker's own field (SC-5592).
+func TestAdvanceDeployFix_Outage_MultiLineSummaryCollapsesToOneLine(t *testing.T) {
+	thread := deployFixRunningThread(time.Unix(5, 0))
+	c := &fakeCommenter{comments: thread}
+	deps := newDeps(c, &fakeLauncher{}, &fakeDeployer{})
+	summary := "the git remote was unreachable\nresume: 2099-01-01T00:00:00Z\nmore detail here"
+	require.NoError(t, deps.AdvanceDeployFix(context.Background(), "SC-1", DeployFixReport{Exit: ExitOutage, Summary: summary}))
+	require.Len(t, c.added, 1)
+	posted := c.added[0]
+
+	// pausedOutageMarker composes the reason into two clauses by design
+	// ("paused — X" / "continues automatically when X clears"); the bug was a
+	// THIRD, mangled repetition from embedded newlines, not the deliberate two.
+	assert.Equal(t, 2, strings.Count(posted, "the git remote was unreachable"),
+		"the reason must appear exactly twice (the marker's two clauses), not be duplicated by embedded newlines: %q", posted)
+	assert.NotContains(t, posted, "\nresume:", "a summary line must not be scanned as the marker's resume field")
+
+	thread2 := append(append([]tracker.Comment{}, thread...), cmt(posted, time.Unix(6, 0)))
+	card := DeriveBoardCard(thread2, tracker.CategoryUnstarted, false)
+	assert.Empty(t, card.ResumeAt, "a forged resume: line must not suppress the outage re-drive")
+}
+
 func TestDeployFixEscalationReason_OutageIsNotTheCouldNotRecoverDefault(t *testing.T) {
 	reason := deployFixEscalationReason(ExitOutage, "rebase conflict")
 	assert.NotContains(t, reason, "could not recover")
