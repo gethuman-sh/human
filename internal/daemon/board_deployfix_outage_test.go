@@ -25,7 +25,7 @@ func deployFixRunningThread(at time.Time) []tracker.Comment {
 func TestAdvanceDeployFix_Outage_PostsTheOutageMarkerNotAFailure(t *testing.T) {
 	c := &fakeCommenter{comments: deployFixRunningThread(time.Unix(5, 0))}
 	deps := newDeps(c, &fakeLauncher{}, &fakeDeployer{})
-	err := deps.AdvanceDeployFix(context.Background(), "SC-1", ExitOutage, Blocker{})
+	err := deps.AdvanceDeployFix(context.Background(), "SC-1", DeployFixReport{Exit: ExitOutage, Summary: "the git remote was unreachable: git fetch origin — could not resolve host"})
 	require.NoError(t, err)
 
 	require.Len(t, c.added, 1, "exactly one comment posted")
@@ -35,6 +35,7 @@ func TestAdvanceDeployFix_Outage_PostsTheOutageMarkerNotAFailure(t *testing.T) {
 		assert.False(t, strings.HasPrefix(b, DeployFailedHeader), "an outage must not red the card: %q", b)
 	}
 	assert.Contains(t, posted, "Nothing to do.", "the paused house style")
+	assert.Contains(t, posted, "the git remote was unreachable", "the card must name what was unreachable")
 
 	thread := append(append([]tracker.Comment{}, c.comments...), cmt(posted, time.Unix(6, 0)))
 	card := DeriveBoardCard(thread, tracker.CategoryUnstarted, false)
@@ -47,7 +48,7 @@ func TestAdvanceDeployFix_Outage_ChargesNoRound(t *testing.T) {
 	thread := deployFixRunningThread(time.Unix(5, 0))
 	c := &fakeCommenter{comments: thread}
 	deps := newDeps(c, &fakeLauncher{}, &fakeDeployer{})
-	require.NoError(t, deps.AdvanceDeployFix(context.Background(), "SC-1", ExitOutage, Blocker{}))
+	require.NoError(t, deps.AdvanceDeployFix(context.Background(), "SC-1", DeployFixReport{Exit: ExitOutage, Summary: "the git remote was unreachable: git fetch origin — could not resolve host"}))
 	require.Len(t, c.added, 1)
 
 	full := append(append([]tracker.Comment{}, thread...), cmt(c.added[0], time.Unix(6, 0)))
@@ -127,13 +128,13 @@ func TestAdvanceDeployFix_Outage_SaysItOnce(t *testing.T) {
 	thread := deployFixRunningThread(time.Unix(5, 0))
 	c := &fakeCommenter{comments: thread}
 	deps := newDeps(c, &fakeLauncher{}, &fakeDeployer{})
-	require.NoError(t, deps.AdvanceDeployFix(context.Background(), "SC-1", ExitOutage, Blocker{}))
+	require.NoError(t, deps.AdvanceDeployFix(context.Background(), "SC-1", DeployFixReport{Exit: ExitOutage, Summary: "the git remote was unreachable: git fetch origin — could not resolve host"}))
 	require.Len(t, c.added, 1, "sanity: first call posts the marker")
 	standing := c.added[0]
 
 	c2 := &fakeCommenter{comments: append(append([]tracker.Comment{}, thread...), cmt(standing, time.Unix(6, 0)))}
 	deps2 := newDeps(c2, &fakeLauncher{}, &fakeDeployer{})
-	require.NoError(t, deps2.AdvanceDeployFix(context.Background(), "SC-1", ExitOutage, Blocker{}))
+	require.NoError(t, deps2.AdvanceDeployFix(context.Background(), "SC-1", DeployFixReport{Exit: ExitOutage, Summary: "the git remote was unreachable: git fetch origin — could not resolve host"}))
 	assert.Empty(t, c2.added, "an identical standing outage marker must not be repeated")
 }
 
@@ -141,7 +142,7 @@ func TestAdvanceDeployFix_Outage_OntoAnAlreadyFailedDoneStagePostsNothing(t *tes
 	thread := append(deployFixReadyComments(), cmt(DeployFailedHeader+"\nsomething else went wrong", time.Unix(9, 0)))
 	c := &fakeCommenter{comments: thread}
 	deps := newDeps(c, &fakeLauncher{}, &fakeDeployer{})
-	require.NoError(t, deps.AdvanceDeployFix(context.Background(), "SC-1", ExitOutage, Blocker{}))
+	require.NoError(t, deps.AdvanceDeployFix(context.Background(), "SC-1", DeployFixReport{Exit: ExitOutage, Summary: "the git remote was unreachable: git fetch origin — could not resolve host"}))
 	assert.Empty(t, c.added, "a red another actor owns must not be flipped back to waiting")
 }
 

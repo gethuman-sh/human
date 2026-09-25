@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/http"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1277,14 +1278,39 @@ func deployFixDispatch(pmKey string, number int, branch string) string {
 	return "/human-deploy-fix " + pmKey + " --pr=" + strconv.Itoa(number) + " --branch=" + branch
 }
 
-// deployFixRounds counts dispatched deploy-fix rounds — one per deploy-fix-started
-// marker — the value the budget bounds against DefaultDeployFixRounds. Mirrors
-// prReviewRounds; per-ticket-lifetime by design (see plan AD2).
+// deployFixRounds counts the deploy-fix rounds the budget has actually been
+// charged for: one per deploy-fix-started marker, MINUS every round whose fixer
+// ended in an outage.
+//
+// The refund is not bookkeeping niceness. The budget is spent at DISPATCH — the
+// marker is posted when the fixer launches — and the uncharged outage re-drive
+// re-enters the whole done stage, so it dispatches a fresh fixer and posts a
+// fresh started marker on every reconcile tick. Without this, a substrate that
+// stays down for two ticks spends the entire 2-round budget on rounds that
+// attempted nothing and the card reds anyway: SC-2307's "an outage costs time and
+// nothing else" broken by the counter rather than by the classifier (SC-5592).
+//
+// Chronological, with a pending flag rather than two independent counts: only an
+// outage that FOLLOWS a started marker refunds that marker's round, so a stray or
+// repeated outage marker can never drive the count below the rounds that really
+// ran. Same started/terminal pairing as lateResultCandidates.
 func deployFixRounds(comments []tracker.Comment) int {
-	n := 0
-	for _, c := range comments {
-		if strings.HasPrefix(strings.TrimSpace(c.Body), DeployFixStartedHeader) {
+	sorted := make([]tracker.Comment, len(comments))
+	copy(sorted, comments)
+	sort.SliceStable(sorted, func(i, j int) bool { return commentNewer(sorted[j], sorted[i]) })
+
+	n, charged := 0, false
+	for _, c := range sorted {
+		trimmed := strings.TrimSpace(c.Body)
+		switch {
+		case strings.HasPrefix(trimmed, DeployFixStartedHeader):
 			n++
+			charged = true
+		case strings.HasPrefix(trimmed, DeployOutageHeader):
+			if charged {
+				n--
+				charged = false
+			}
 		}
 	}
 	return n
@@ -1738,16 +1764,36 @@ func (b Blocker) addTo(m marker.Marker) marker.Marker {
 	return m
 }
 
+// DeployFixReport is what the deploy fixer recorded in stage.deploy-fix, as its
+// driver needs it. The three travel as one value because they are one record
+// read in one place (readDeployFixReport), and the next field the loop needs
+// should not become a fourth positional argument.
+type DeployFixReport struct {
+	// Exit is the class the fixer recorded; "" when it recorded nothing, which
+	// the driver treats like any other non-done ending.
+	Exit StageExit
+	// Blocker is what a needs-human-work stop recorded about itself; the loop
+	// carries it onto the marker it posts on the fixer's behalf (SC-5179).
+	Blocker Blocker
+	// Summary is the fixer's one line about its stop. On an outage it is the only
+	// place the unreachable substrate is named — an outage carries no blocker by
+	// contract (shared/exit-contract.md) — so it becomes the outage marker's
+	// reason and, through DeriveBoardCard, the card's face (SC-5592).
+	Summary string
+}
+
 // AdvanceDeployFix is the deploy-fixer's Stop-event driver. On the fixer's exit the
-// failure watcher calls it with the exit the agent recorded in stage.deploy-fix. A
+// failure watcher calls it with the report the agent recorded in stage.deploy-fix. A
 // `done` exit publishes the fixer's local resolution and re-runs the deploy pipeline
-// (the branch is then ready for a fresh CI gate + merge); any other exit reds the card
-// with a terminal deploy-failed. The deployFixRounds budget already bounds how many
-// times the pipeline re-enters here, so a genuinely unfixable failure terminates.
-// The blocker is what a needs-human-work stop recorded about itself; the loop
-// carries it onto the marker it posts on the agent's behalf, so the person on
-// the red card is not sent back to re-run the investigation.
-func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string, fixExit StageExit, blocker Blocker) error {
+// (the branch is then ready for a fresh CI gate + merge); an `outage` exit is not a
+// failure at all and parks the card on the done stage's outage marker (SC-5592); any
+// other exit reds the card with a terminal deploy-failed. The deployFixRounds budget
+// already bounds how many times the pipeline re-enters here, so a genuinely
+// unfixable failure terminates. The blocker is what a needs-human-work stop recorded
+// about itself; the loop carries it onto the marker it posts on the agent's behalf,
+// so the person on the red card is not sent back to re-run the investigation.
+func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string, report DeployFixReport) error {
+	fixExit := report.Exit
 	comments, err := d.Commenter.ListComments(ctx, pmKey)
 	if err != nil {
 		return errors.WrapWithDetails(err, "loading comments for deploy fix", "pm", pmKey)
@@ -1796,15 +1842,48 @@ func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string,
 	if stageAlreadyFailed(comments, BoardDoneStage) {
 		return nil
 	}
+	// A substrate the fixer could not reach is not a broken deploy: nothing about
+	// the branch is wrong and nothing was attempted, so the rule since SC-2307 is
+	// to wait rather than red. Posting the done stage's outage marker is what puts
+	// the card in BoardOutage, where reconcileOutage re-drives it on its own
+	// interval charging nothing (isDeployRetry accepts an outage card) and hands it
+	// to a person only past OutageWaitBound. Deliberately AFTER the
+	// stageAlreadyFailed guard, unlike handleBoardAgentExit's outage gate: there the
+	// standing failure is usually the one the exiting skill posted itself, while the
+	// deploy fixer posts no marker at all — so a deploy-failed newer than this
+	// round's dispatch is another actor's red that a person now owns, and flipping it
+	// back to "waiting" would re-drive the deploy underneath them (SC-5592).
+	if fixExit == ExitOutage {
+		return d.deployFixOutage(ctx, pmKey, comments, report.Summary)
+	}
 	// The fixer's own blocker evidence rides on the marker: the escalation
 	// line says what the fixer was sent to fix, the four fields say what it
 	// found (SC-5179). Only the exit that defines a blocker carries one; a
 	// needs-input stop may leave the template's placeholders in the object.
 	m := failureMarker(MarkerDeployFailed, deployFixEscalationReason(fixExit, dispatchedFailure(comments)))
 	if fixExit == ExitNeedsHumanWork {
-		m = blocker.addTo(m)
+		m = report.Blocker.addTo(m)
 	}
 	_, _ = d.Commenter.AddComment(ctx, pmKey, markerBody(m, "reason", "kind", "evidence", "attempted", "release"))
+	return nil
+}
+
+// deployFixOutage posts the done stage's outage marker for a fixer that reported
+// the substrate was unreachable, and says it once: an identical standing marker is
+// left in place rather than re-dated, which is both what keeps the ticket from
+// collecting one per tick and what makes the wait measurable (outageRunSince,
+// SC-2851). summary is the fixer's own line, so the card names what was
+// unreachable instead of the generic fallback.
+func (d BoardTransitionDeps) deployFixOutage(ctx context.Context, pmKey string, comments []tracker.Comment, summary string) error {
+	body := markerBody(pausedOutageMarker(outageTypeFor(BoardDoneStage), nil, "", "", strings.TrimSpace(summary)))
+	if outageAlreadyStated(comments, BoardDoneStage, body) {
+		d.Logger.Info().Str("pm", pmKey).
+			Msg("board deploy fix: the card already says the substrate is down, not repeating it")
+		return nil
+	}
+	if _, err := d.Commenter.AddComment(ctx, pmKey, body); err != nil {
+		return errors.WrapWithDetails(err, "posting the deploy-fix outage marker", "pm", pmKey)
+	}
 	return nil
 }
 
@@ -1848,18 +1927,38 @@ func deployFixEscalationReason(fixExit StageExit, dispatched string) string {
 	if dispatched != "" {
 		blocking = " The failure it was sent to fix: " + dispatched
 	}
+	// Every member is listed on purpose and the linter enforces it: an exit class
+	// falling silently into the default below is exactly how SC-5592 shipped —
+	// ExitOutage joined the vocabulary and this switch never had to decide. The
+	// `default` stays as a runtime guard for a value read off the wire.
+	//exhaustive:enforce
 	switch fixExit {
 	case ExitNeedsInput:
 		return "the deploy fixer needs a human decision — read the PR and its CI, decide, then re-run Deploy." + blocking
 	case ExitNeedsHumanWork:
 		return "the deploy failure needs manual work the fixer could not do — resolve it on the branch, then re-run Deploy." + blocking
+	case ExitOutage:
+		// Not reachable from AdvanceDeployFix, which routes an outage to the
+		// uncharged outage marker above before any escalation is composed. Written
+		// as a real answer rather than a fall-through so a direct caller — or a
+		// future route — states the wait instead of blaming the branch.
+		return "the deploy fixer could not reach the substrate it needs — wait for it to come back, then re-run Deploy." + blocking
+	case ExitRetryable, ExitDone:
+		return deployFixStalledReason(dispatched, blocking)
 	default:
-		if dispatched != "" {
-			return "the deploy fixer could not recover the deploy. Fix it on the branch and push — " +
-				"re-running Deploy alone will hit the same failure." + blocking
-		}
-		return "the deploy fixer stopped without recovering the deploy — check the PR and its CI, then re-run Deploy"
+		return deployFixStalledReason(dispatched, blocking)
 	}
+}
+
+// deployFixStalledReason is the headline for a fixer that ran and did not recover:
+// it names the blocking failure and refuses to advise a retry that would hit it
+// again (SC-3615).
+func deployFixStalledReason(dispatched, blocking string) string {
+	if dispatched != "" {
+		return "the deploy fixer could not recover the deploy. Fix it on the branch and push — " +
+			"re-running Deploy alone will hit the same failure." + blocking
+	}
+	return "the deploy fixer stopped without recovering the deploy — check the PR and its CI, then re-run Deploy"
 }
 
 // deployGate queues deploy pipelines: the Deploy button ships every ready fix

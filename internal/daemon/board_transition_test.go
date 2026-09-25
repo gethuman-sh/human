@@ -2109,7 +2109,7 @@ func TestAdvanceDeployFix_Done_RerunsDeploy(t *testing.T) {
 	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/13", Number: 13},
 		checks: []forge.ChecksState{forge.ChecksPassing}}
 	deps := newDeps(c, &fakeLauncher{}, p)
-	err := deps.AdvanceDeployFix(context.Background(), "SC-1", ExitDone, Blocker{})
+	err := deps.AdvanceDeployFix(context.Background(), "SC-1", DeployFixReport{Exit: ExitDone})
 	require.NoError(t, err)
 	assert.Equal(t, 1, p.merged, "a done fixer re-runs the deploy through to the merge")
 
@@ -2134,7 +2134,7 @@ func TestAdvanceDeployFix_Done_PublishesResolutionBeforeDeploy(t *testing.T) {
 	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/13", Number: 13},
 		checks: []forge.ChecksState{forge.ChecksPassing}}
 	deps := newDeps(c, &fakeLauncher{}, p)
-	require.NoError(t, deps.AdvanceDeployFix(context.Background(), "SC-1", ExitDone, Blocker{}))
+	require.NoError(t, deps.AdvanceDeployFix(context.Background(), "SC-1", DeployFixReport{Exit: ExitDone}))
 	assert.Equal(t, []string{"feat/x"}, p.published,
 		"the fixer's local resolution must be published to the card's branch")
 	assert.Equal(t, 1, p.publishCalls, "the resolution is published exactly once per done exit")
@@ -2155,7 +2155,7 @@ func TestAdvanceDeployFix_Done_HandoffLess_PublishesTheStartMarkersBranch(t *tes
 	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/13", Number: 13},
 		checks: []forge.ChecksState{forge.ChecksPassing}}
 	deps := newDeps(c, &fakeLauncher{}, p)
-	require.NoError(t, deps.AdvanceDeployFix(context.Background(), "SC-1", ExitDone, Blocker{}))
+	require.NoError(t, deps.AdvanceDeployFix(context.Background(), "SC-1", DeployFixReport{Exit: ExitDone}))
 	assert.Equal(t, []string{"feat/x"}, p.published,
 		"a handoff-less loop's resolution must still be published to the start marker's branch")
 	assert.Equal(t, "feat/x", p.req.Branch, "the re-run deploy must ship the start marker's branch, not an empty one")
@@ -2182,7 +2182,7 @@ func TestAdvanceDeployFix_PublishFails_RedsWithoutDeploying(t *testing.T) {
 		checks:     []forge.ChecksState{forge.ChecksPassing},
 		publishErr: errors.New("refusing to publish feat/x: the source is behind origin")}
 	deps := newDeps(c, &fakeLauncher{}, p)
-	err := deps.AdvanceDeployFix(context.Background(), "SC-1", ExitDone, Blocker{})
+	err := deps.AdvanceDeployFix(context.Background(), "SC-1", DeployFixReport{Exit: ExitDone})
 	require.Error(t, err, "an unpublishable resolution is a deploy failure")
 	assert.Zero(t, p.call, "a failed publish must not open or re-gate a pull request")
 	assert.Zero(t, p.merged, "a failed publish must never reach the merge")
@@ -2206,7 +2206,7 @@ func TestAdvanceDeployFix_NonDoneExit_PublishesNothing(t *testing.T) {
 		c := &fakeCommenter{comments: deployFixReadyComments()}
 		p := &fakeDeployer{}
 		deps := newDeps(c, &fakeLauncher{}, p)
-		require.NoError(t, deps.AdvanceDeployFix(context.Background(), "SC-1", exit, Blocker{}))
+		require.NoError(t, deps.AdvanceDeployFix(context.Background(), "SC-1", DeployFixReport{Exit: exit}))
 		assert.Zero(t, p.publishCalls, "exit %q must not publish a branch", exit)
 	}
 }
@@ -2216,7 +2216,7 @@ func TestAdvanceDeployFix_NeedsInput_Reds(t *testing.T) {
 	c := &fakeCommenter{comments: deployFixReadyComments()}
 	p := &fakeDeployer{}
 	deps := newDeps(c, &fakeLauncher{}, p)
-	err := deps.AdvanceDeployFix(context.Background(), "SC-1", ExitNeedsInput, Blocker{})
+	err := deps.AdvanceDeployFix(context.Background(), "SC-1", DeployFixReport{Exit: ExitNeedsInput})
 	require.NoError(t, err)
 	assert.Zero(t, p.merged, "a needs-input exit never touches the deployer")
 
@@ -2236,7 +2236,7 @@ func TestAdvanceDeployFix_UnrecordedExit_Reds(t *testing.T) {
 	c := &fakeCommenter{comments: deployFixReadyComments()}
 	p := &fakeDeployer{}
 	deps := newDeps(c, &fakeLauncher{}, p)
-	err := deps.AdvanceDeployFix(context.Background(), "SC-1", "", Blocker{})
+	err := deps.AdvanceDeployFix(context.Background(), "SC-1", DeployFixReport{})
 	require.NoError(t, err)
 	assert.Zero(t, p.merged)
 

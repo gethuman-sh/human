@@ -157,34 +157,46 @@ func TestReadPRReviewVerdict_staleOnly_notFresh(t *testing.T) {
 	assert.Empty(t, verdict, "a stale record's fields are never populated")
 }
 
-func TestReadDeployFixExit_readsField(t *testing.T) {
+func TestReadDeployFixReport_readsField(t *testing.T) {
 	isolateState(t)
 	writeRawReport(t, "SC-1", "stage.deploy-fix", `{"exit":"done"}`)
 
-	exit, _ := readDeployFixExit(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
-	assert.Equal(t, daemon.ExitDone, exit)
+	report := readDeployFixReport(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
+	assert.Equal(t, daemon.ExitDone, report.Exit)
 }
 
 // The blocker object is what the ticket exists to carry; a wrong tag would
 // drop every field silently, so the decode is pinned field by field.
-func TestReadDeployFixExit_readsTheBlocker(t *testing.T) {
+func TestReadDeployFixReport_readsTheBlocker(t *testing.T) {
 	isolateState(t)
 	writeRawReport(t, "SC-1", "stage.deploy-fix",
 		`{"exit":"needs-human-work","blocker":{"kind":"missing-permission","evidence":"403 on push","attempted":"retried once","release":"token gains write"}}`)
 
-	exit, blocker := readDeployFixExit(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
-	assert.Equal(t, daemon.ExitNeedsHumanWork, exit)
-	assert.Equal(t, daemon.Blocker{Kind: "missing-permission", Evidence: "403 on push", Attempted: "retried once", Release: "token gains write"}, blocker)
+	report := readDeployFixReport(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
+	assert.Equal(t, daemon.ExitNeedsHumanWork, report.Exit)
+	assert.Equal(t, daemon.Blocker{Kind: "missing-permission", Evidence: "403 on push", Attempted: "retried once", Release: "token gains write"}, report.Blocker)
+}
+
+// An outage carries no blocker by contract — it has a summary instead, which is
+// the only place the unreachable substrate is named (SC-5592).
+func TestReadDeployFixReport_readsTheSummary(t *testing.T) {
+	isolateState(t)
+	writeRawReport(t, "SC-1", "stage.deploy-fix",
+		`{"exit":"outage","summary":"the git remote was unreachable"}`)
+
+	report := readDeployFixReport(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
+	assert.Equal(t, daemon.ExitOutage, report.Exit)
+	assert.Equal(t, "the git remote was unreachable", report.Summary)
 }
 
 // A missing deploy-fix report reads as "" — the driver treats a non-done exit,
 // including absence, as red.
-func TestReadDeployFixExit_missingIsEmpty(t *testing.T) {
+func TestReadDeployFixReport_missingIsEmpty(t *testing.T) {
 	isolateState(t)
 	shrinkPRLoopReadBackoff(t)
 
-	exit, _ := readDeployFixExit(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
-	assert.Empty(t, exit)
+	report := readDeployFixReport(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
+	assert.Empty(t, report.Exit)
 }
 
 // ctx cancellation mid-backoff must return promptly rather than block for the

@@ -94,21 +94,24 @@ func readPRFixReport(ctx context.Context, project, pmKey string, notBefore time.
 	return v.Exit, v.Options, summary, v.Head, recorded, fresh
 }
 
-// readDeployFixExit returns the deploy fixer's exit recorded in stage.deploy-fix
-// ("" when absent — the driver treats a non-done exit, including absence, as red).
+// readDeployFixReport returns the deploy fixer's stage.deploy-fix record: the exit
+// ("" when absent — the driver treats a non-done exit, including absence, as red),
+// the blocker a needs-human-work stop recorded, and the one-line summary. The
+// summary is what an OUTAGE has instead of a blocker — the exit contract gives an
+// outage no blocker — so it is what names the unreachable substrate on the card
+// (SC-5592).
 //
 // notBefore anchors freshness the same way as the loop reads above.
-func readDeployFixExit(ctx context.Context, project, pmKey string, notBefore time.Time, logger zerolog.Logger) (daemon.StageExit, daemon.Blocker) {
+func readDeployFixReport(ctx context.Context, project, pmKey string, notBefore time.Time, logger zerolog.Logger) daemon.DeployFixReport {
 	var v struct {
 		Exit    string         `json:"exit"`
 		Blocker daemon.Blocker `json:"blocker"`
+		Summary string         `json:"summary"`
 	}
 	_, _ = readStageReportSettled(ctx, project, pmKey, "stage.deploy-fix", notBefore, &v, logger)
-	// The state store hands back a bare string; this is the one place it becomes
-	// a StageExit, so the parse boundary is explicit rather than implied. The
-	// blocker object travels with it so the loop's marker can carry the
-	// fixer's evidence (SC-5179).
-	return daemon.StageExit(v.Exit), v.Blocker
+	// The state store hands back a bare string; this is the one place it becomes a
+	// StageExit, so the parse boundary is explicit rather than implied.
+	return daemon.DeployFixReport{Exit: daemon.StageExit(v.Exit), Blocker: v.Blocker, Summary: v.Summary}
 }
 
 // readStageReportSettled loads one loop step's JSON report from the agent
