@@ -4136,6 +4136,14 @@ func boardTransitionDepsFor(reg *daemon.ProjectRegistry, pmKey string, resolver 
 			}
 			return slices.Contains(names, name)
 		},
+		// The deploy's checkout interlock reads the same running-agent metadata
+		// the reconcile pass and the failure watcher do (FailureDeps.LiveAgents,
+		// ReconcileDeps.LiveAgents), so all three answer "is that container still
+		// there" from one source. Unlike LoopStepAlive above, a listing failure
+		// here must NOT read as alive: that would stall every deploy for the whole
+		// wait bound on a docker hiccup, so the interlock treats an unusable
+		// answer as "not held" (SC-5691).
+		LiveAgents: liveBoardAgents,
 	}, nil
 }
 

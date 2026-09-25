@@ -302,6 +302,16 @@ type BoardTransitionDeps struct {
 	// back to the [human:bug-verdict] marker heuristic and finally to the plain
 	// build retry (SC-2986).
 	Getter tracker.Getter
+	// LiveAgents lists the board agents running on this machine, so a starting
+	// deploy can tell whether the implementation container still holds the
+	// checkout it is about to push from. SC-5476 taught the chain and the orphan
+	// reconcile about inline-review liveness and left the LAUNCH blind: since
+	// SC-782 the verdict is posted from inside that container minutes before it
+	// exits, so "review complete on the ticket" stopped implying "the container
+	// is gone" and the deploy raced it (SC-5691). nil disables the interlock (the
+	// package's "nil disables" convention) — the bare CLI cannot list agents, and
+	// the daemon route always can.
+	LiveAgents LiveAgentLister
 }
 
 // Hyphen-free agent-name suffixes for the PR review→fix loop steps. parseAgentName
@@ -1110,6 +1120,17 @@ var startPRReview = func(d BoardTransitionDeps, req BoardTransitionRequest, card
 // change cannot merge. On the already-merged carve-out (a re-run on shipped
 // work) it short-circuits to the terminal success path exactly like DeployBranch.
 func (d BoardTransitionDeps) openDraftPRAndReview(ctx context.Context, pmKey string, card BoardCard) error {
+	// The interlock, first: everything below this line writes to the checkout —
+	// the push, and FreshenBranch moving the local branch ref — and the
+	// implementation container may still be working in it. Refusing is not an
+	// option here (nothing re-drives a reviewed card into the done stage), so the
+	// stage waits; past the bound it abandons the launch without a marker, since
+	// a container hung that long is the stuck-running sweep's to answer (SC-5691).
+	if err := d.awaitCheckoutFree(ctx, pmKey); err != nil {
+		d.Logger.Warn().Err(err).Str("pm", pmKey).
+			Msg("board PR loop: abandoning the deploy launch; the checkout is still held")
+		return err
+	}
 	if d.Deployer.BranchMerged(ctx, d.WorkspaceDir, card.Branch) {
 		_ = postMarker(ctx, d.Commenter, pmKey, marker.Marker{
 			Type:   MarkerDeployed,

@@ -84,7 +84,9 @@ func TestMermaid_SaysWhenTheMarkerIsPerStage(t *testing.T) {
 // SC-4244: a launch the single-flight guard refused records nothing and moves
 // nothing, so each of its six events must be a true self-loop with no marker.
 // A placeholder dst would draw a real exit in the diagram and let a future trap
-// state hide behind an edge no item ever takes.
+// state hide behind an edge no item ever takes. The seventh is the deploy
+// deferred behind the checkout interlock (SC-5691) — it records nothing for
+// the same reason the six refusals do.
 func TestTheRefusalEventsAreSelfLoopsThatRecordNothing(t *testing.T) {
 	doc, err := pipelinefsm.Load()
 	require.NoError(t, err)
@@ -96,6 +98,7 @@ func TestTheRefusalEventsAreSelfLoopsThatRecordNothing(t *testing.T) {
 		"pr-review-launch-refused":    false,
 		"pr-fix-launch-refused":       false,
 		"deploy-fixer-launch-refused": false,
+		"deploy-launch-deferred":      false,
 	}
 	for _, e := range doc.Events {
 		if _, ok := want[e.Name]; !ok {

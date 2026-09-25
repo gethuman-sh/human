@@ -510,3 +510,68 @@ func TestDispatchDeployFixer_gateRefusalRecordsTheDeployFailure(t *testing.T) {
 	_, fixStarted := posted(c, DeployFixStartedHeader)
 	assert.False(t, fixStarted)
 }
+
+// The CLI route refuses the checkout interlock exactly like the board route
+// waits for it — but here it reports the refusal to the caller instead of
+// abandoning silently, since a person or an agent is waiting for an answer.
+func TestStartDeploy_refusesWhileTheImplementationContainerHoldsTheCheckout(t *testing.T) {
+	shortCheckoutWait(t)
+	c := &fakeCommenter{comments: reviewedThread()}
+	p := &fakeDeployer{}
+	deps, l := reviewableDeps(c, p)
+	deps.LiveAgents = liveAgents("board-SC-1-implementation")
+
+	_, err := runStartDeploy(t, deps, StartDeployRequest{PMKey: "SC-1", Branch: "autofix/sc-1"})
+
+	require.Error(t, err)
+	assert.True(t, stderrors.Is(err, ErrDeployCheckoutBusy))
+	assert.Contains(t, err.Error(), "deploy refused")
+	assert.Zero(t, p.call, "nothing is pushed into a checkout another stage holds")
+	assert.Zero(t, l.calls)
+	for _, b := range c.added {
+		assert.NotContains(t, b, DeployStartedHeader, "a deploy that never started may not record a start")
+		assert.NotContains(t, b, DeployFailedHeader, "a refusal is not a failure")
+	}
+}
+
+// --ready overrides the machine review, not the checkout: the engine it runs
+// writes to the same tree the implementation container holds.
+func TestStartDeploy_readyDoesNotOverrideTheCheckoutInterlock(t *testing.T) {
+	shortCheckoutWait(t)
+	c := &fakeCommenter{comments: reviewedThread()}
+	p := &fakeDeployer{}
+	deps, _ := reviewableDeps(c, p)
+	deps.LiveAgents = liveAgents("board-SC-1-implementation")
+	deps.MergeDraftPR = true
+
+	_, err := runStartDeploy(t, deps, StartDeployRequest{PMKey: "SC-1", Branch: "autofix/sc-1"})
+
+	require.Error(t, err)
+	assert.True(t, stderrors.Is(err, ErrDeployCheckoutBusy))
+	assert.Zero(t, p.call)
+}
+
+// Once the implementation container ends, the wait resolves and the deploy
+// proceeds — the wait happens before the start marker, so a refused deploy
+// never records one.
+func TestStartDeploy_proceedsOnceTheContainerIsGone(t *testing.T) {
+	shortCheckoutWait(t)
+	c := &fakeCommenter{comments: reviewedThread()}
+	p := &fakeDeployer{res: PRResult{Number: 42, URL: "https://example/pr/42", Draft: true}}
+	deps, _ := reviewableDeps(c, p)
+	calls := 0
+	deps.LiveAgents = func() ([]string, error) {
+		calls++
+		if calls == 1 {
+			return []string{"board-SC-1-implementation"}, nil
+		}
+		return nil, nil
+	}
+
+	res, err := runStartDeploy(t, deps, StartDeployRequest{PMKey: "SC-1", Branch: "autofix/sc-1"})
+
+	require.NoError(t, err)
+	assert.Equal(t, DeployOutcomeReviewStarted, res.Outcome)
+	_, found := posted(c, DeployStartedHeader)
+	assert.True(t, found, "the wait happens before the start marker, so a deploy that proceeds must still record its start")
+}

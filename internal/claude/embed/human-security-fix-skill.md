@@ -12,7 +12,7 @@ This is the security counterpart to **human-autofix**: it shares the same pipeli
 
 The run does **not** end at the review handoff: exactly like the bug flow, the skill chains the fix into a review and, on a passing verdict, drives the same deploy pipeline (push → PR → CI gate → merge → close). A failing review or a red CI gate stops the run honestly with the handoff left standing for a human.
 
-**Board-context exception**: when `<BOARD_CONTEXT>` is true (launched with `--board`; `HUMAN_AGENT_NAME` starting with `board-` is a fallback signal), this skill runs *as a board stage agent*. The container holds no push/PR credentials and the Deploy button owns shipping, so **end after the review (Step 7.3) and skip Step 8 (deploy) entirely**. The review runs **inline, in this warm container** (Steps 7.2–7.3) — one container startup, not two. Do NOT push, open, or merge a PR in board context.
+**Board-context exception**: when `<BOARD_CONTEXT>` is true (launched with `--board`; `HUMAN_AGENT_NAME` starting with `board-` is a fallback signal), this skill runs *as a board stage agent*. The container holds no push/PR credentials and the Deploy button owns shipping, so **end after the review (Step 7.3) and skip Step 8 (deploy) entirely** — and the run **ends** there: post the Step 9 summary, record `stage.implementation`, and terminate (see 'The end of the run'). The review runs **inline, in this warm container** (Steps 7.2–7.3) — one container startup, not two. Do NOT push, open, or merge a PR in board context.
 
 This skill runs **without user interaction**. Do NOT use `AskUserQuestion` at any step — reach a verdict and act on it. Every run ends in exactly one verdict: **confirmed**, **not-a-bug** (not a real vulnerability), or **undetermined**.
 
@@ -290,7 +290,7 @@ human handoff post <SEC_KEY> --branch autofix/<work-key> --review inline        
 
 The command derives `commits:` and `daemon:`, verifies every SHA is reachable on the branch (fetching origin first), and refuses to post otherwise. `--review inline` is **mandatory here and in every context**: this skill reviews the fix itself in Step 7.2, and the handoff is the only thing the daemon can read before your own `[human:review-started]` lands. Without it the daemon starts a second reviewer whose verdict overwrites yours. If the handoff cannot be posted (non-zero exit), STOP with an honest status report — **do not report success**.
 
-**Board-context exception applies here**: when `<BOARD_CONTEXT>` is true, post the handoff (so `branch:`/`commits:` are recorded for the Deploy button), then CONTINUE to the inline review (Steps 7.2–7.3) in this same warm container. STOP after the review (do not run Step 8 / deploy). Do NOT push or `git ls-remote` — the branch is intentionally local. The `review: inline` line you posted in 7.1 is what stops the daemon launching a second review container.
+**Board-context exception applies here**: when `<BOARD_CONTEXT>` is true, post the handoff (so `branch:`/`commits:` are recorded for the Deploy button), then CONTINUE to the inline review (Steps 7.2–7.3) in this same warm container. STOP after the review — the run ENDS there: Step 9's summary marker is its last act (do not run Step 8 / deploy; see 'The end of the run'). Do NOT push or `git ls-remote` — the branch is intentionally local. The `review: inline` line you posted in 7.1 is what stops the daemon launching a second review container.
 
 **The handoff is posted once, and before the review checkpoint.** 7.1 precedes 7.2's `[human:review-started]`, so the branch and commits are on the ticket before anything judges them. Never post a second `[human:ready-for-review]` after the verdict: a handoff is the start of a round, and one posted after a review reads as a new round of work. If the reviewer commits on the branch, record those commits on the verdict (7.2), not by re-posting the handoff.
 
@@ -377,12 +377,14 @@ Only after a passing review. This is the board's deploy pipeline (push → draft
    `human deploy` records the start on the ticket itself (`[human:deploy-started]`) before it touches the forge — do **not** post that marker by hand.
 
    One outcome is neither success nor failure: if the command exits with **`deploy refused: this ticket is waiting on a decision`**, an open `[human:options]` block is waiting on a person. That is not a crash and not a deploy failure — no `[human:deploy-failed]` is posted and the card is not red. Do **not** re-run with `--override-decision` (only a person may decide to ship past their own open question) and do **not** merge by hand. Post the Step 9 run summary, record the stage outcome as `needs-input` (per "Recording the board stage outcome"), and STOP, leaving the card paused where it is.
+
+   A second refusal, **`deploy refused: the implementation container for this ticket still holds the checkout`**, means a run of this ticket's implementation stage is still finishing in the same working tree: nothing failed, no marker is posted, and the card is not red. Report it as `retryable` and STOP — the checkout is free once that run ends, and the next attempt proceeds on its own.
 2. In split topology, close `<ENG_KEY>` as well: `human done <ENG_KEY>`.
 3. For the Step 9 report, read `<PR_URL>` from the deployed marker if needed: `human marker show <SEC_KEY> deployed`.
 
 ## Step 9 — Run summary: ticket comment, then report
 
-Once a fix was attempted (Step 4 ran), the ticket must carry a plain-language account of the run. Post it at EVERY terminal point after Step 4: the board-context stop after the handoff (7.1), a shipped fix (Step 8), and every honest STOP. Runs that end at the verdict gate (Step 3) post nothing here — the triage verdict comment already tells that story. **Keep exploit specifics out of this summary if the ticket is publicly visible — describe the risk and the hardening, not a working attack.**
+Once a fix was attempted (Step 4 ran), the ticket must carry a plain-language account of the run. Post it at EVERY terminal point after Step 4: the board-context stop after the inline review (7.3), a shipped fix (Step 8), and every honest STOP. Runs that end at the verdict gate (Step 3) post nothing here — the triage verdict comment already tells that story. **Keep exploit specifics out of this summary if the ticket is publicly visible — describe the risk and the hardening, not a working attack.**
 
 ```bash
 human marker post <SEC_KEY> fix-summary --body-file - <<'SUMMARY_EOF'
@@ -430,4 +432,6 @@ Verdict: confirmed (<severity>) — review: <verdict> — shipped
 - Ticket:     closed by the deploy loop once merged
 ```
 
-For a board-context run (exception in Step 7.1) or a failed review/deploy gate, report where the pipeline stopped, which marker records it, and what a human needs to do next.
+For a board-context run (the stop after the inline review, 7.3) or a failed review/deploy gate, report where the pipeline stopped, which marker records it, and what a human needs to do next.
+
+<!-- human:include run-end -->

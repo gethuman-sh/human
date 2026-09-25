@@ -77,6 +77,16 @@ var priorFindingsFragment []byte
 //go:embed embed/shared/fsm.md
 var fsmFragment []byte
 
+// The implementation stage's three prompts each defined their stop as steps to
+// SKIP rather than as an end, and with the review now running inline the deploy's
+// green light lands while the run is still writing its summary. One run read the
+// deploy's failure off its own ticket, spent six minutes on it and posted a
+// free-form comment nothing reads (SC-5691). One copy of "the run ends here" is
+// what keeps that fix from being made per prompt, per pipeline.
+//
+//go:embed embed/shared/run-end.md
+var runEndFragment []byte
+
 // sharedFragments are prompt blocks that must read identically in every skill
 // and agent that carries them. Keeping one copy here and substituting it at
 // install time is what stops twenty prompts from drifting apart, which is how
@@ -90,6 +100,7 @@ var sharedFragments = map[string][]byte{
 	"dependents":            dependentsFragment,
 	"prior-findings":        priorFindingsFragment,
 	"fsm":                   fsmFragment,
+	"run-end":               runEndFragment,
 }
 
 // fragmentArgs names the arguments each shared fragment requires. A fragment
