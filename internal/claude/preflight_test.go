@@ -66,3 +66,35 @@ func TestPreflight_OrdersOnlyOnWorkReallyUnderway(t *testing.T) {
 	assert.Contains(t, body, "[human:claim]",
 		"a claimed run with no branch yet is underway and must still be treated as such")
 }
+
+// SC-5704: preflight is dispatched only from a bug run (human-autofix-skill.md)
+// or a security run (human-security-fix-skill.md), so every scope-fork question
+// it could ever raise is on a ticket whose Expected list is already the
+// acceptance criteria. The admissibility section used to license "scope forks
+// and product intent" generally and then argue an exception for that exact
+// class immediately below it — the same shadowing-instead-of-replacing failure
+// SC-5274 fixed for the ordering fork. The dispatch lines must stop asking for
+// one too, or a reworded prompt on either skill silently restores the bug
+// (SC-4453 is the same family recurring).
+func TestPreflight_NoScopeForkOnBugOrSecurityRun(t *testing.T) {
+	body := string(preflightAgentContent)
+
+	assert.Contains(t, body, "there is no scope fork",
+		"the admissibility section must state the bug/security no-scope-fork rule")
+	assert.Contains(t, body, "every Expected item is in scope",
+		"the rule must say the ticket's Expected list is already the acceptance")
+	assert.NotContains(t, body, "Ask about **scope forks and product intent**",
+		"the general scope-fork licence must not stand above the rule that narrows it to nothing")
+
+	autofix := string(autofixSkillContent)
+	assert.NotContains(t, autofix, "surface any genuine product/scope fork",
+		"the autofix dispatch line must not ask preflight for a product/scope fork")
+	assert.Contains(t, autofix, "There is no scope fork on a bug ticket",
+		"the autofix dispatch line must tell preflight the rule directly")
+
+	security := string(securityFixSkillContent)
+	assert.NotContains(t, security, "surface any genuine product/scope fork",
+		"the security-fix dispatch line must not ask preflight for a product/scope fork")
+	assert.Contains(t, security, "There is no scope fork on a security ticket",
+		"the security-fix dispatch line must tell preflight the rule directly")
+}

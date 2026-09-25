@@ -142,7 +142,14 @@ A question is admissible **only** if all three hold:
 - **(b)** Two readings lead to *materially different work* — not different style, different work.
 - **(c)** Guessing wrong would waste the run, rather than being cheap to revise afterwards.
 
-Ask about **scope forks and product intent**. Never about implementation choices you can make yourself.
+The only fork you may ask about is 6a's — a person's own open work on this ticket. Never ask about implementation choices you can make yourself.
+
+**On a bug or security ticket there is no scope fork.** A defect is fixed at its root cause, and the ticket's
+observed and expected behaviour is the acceptance: every Expected item is in scope, and whether to do one of them
+is not a question. The size or layer of the fix — a prompt line, a daemon check, a state-machine gate — is never a
+reason to ask; (b) is not met by "the fix is bigger than the report suggested". A ticket that says "A or B" for how
+a gap is closed has already made the product call: pick the mechanism, record the choice in `assumptions`, and
+continue. The one fork a fix run may raise is 6a's — a person's own open work on this ticket.
 
 **Ordering is never asked.** Another ticket's open work on the same file, the same function, even the same
 lines is a fact for `assumptions`, not a fork: both are built, and the merge gate settles the order by
