@@ -52,7 +52,7 @@ The one exception is a standalone run outside the board (you were invoked direct
 
 ## Convergence
 
-The daemon bounds deploy-fix attempts. If you cannot recover the deploy — a conflict needs a product decision, or a failing check demands work outside this branch's scope — do NOT guess and do NOT push a hollow change. Record it and stop:
+The daemon bounds deploy-fix attempts: two rounds per ticket, plus one more each time a person clicks Retry deploy on the card. So your stop is not the end of this ticket's automation — a person who re-arms a round sends the next fixer in with exactly what you wrote here and nothing else, which is why `release` has to name a condition they can actually check. If you cannot recover the deploy — a conflict needs a product decision, or a failing check demands work outside this branch's scope — do NOT guess and do NOT push a hollow change. Record it and stop:
 
 ```bash
 human state set <WORK_KEY> stage.deploy-fix --json --body-file - <<'EOF'
