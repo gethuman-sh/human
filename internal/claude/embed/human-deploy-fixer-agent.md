@@ -56,7 +56,7 @@ The daemon bounds deploy-fix attempts. If you cannot recover the deploy — a co
 
 ```bash
 human state set <WORK_KEY> stage.deploy-fix --json --body-file - <<'EOF'
-{"exit":"<done|needs-input|needs-human-work>",
+{"exit":"<done|outage|needs-input|needs-human-work>",
  "pushed":<true|false>,
  "addressed":"<what you rebased/fixed>",
  "blocker":{"kind":"<missing-permission|unavailable-dependency|exhausted-fix-rounds|conflicting-requirements|other — needs-human-work only>",
@@ -71,6 +71,7 @@ EOF
 ```
 
 - `done` — rebased current on the branch ref, the deploy-relevant checks pass locally; the daemon publishes the branch and re-runs Deploy. Record `"pushed":false` in board context — that is the expected shape, not a shortfall. Omit `blocker`.
+- `outage` — the substrate you needed was unreachable (the git remote, the forge API, the model API), so nothing about the branch is wrong and nothing was attempted. Record `"exit":"outage"` and name what was unreachable in `summary` — that line becomes the card's face. Omit `blocker`. The daemon posts `[human:deploy-outage]`, the card reads paused, **no round is charged**, and the deploy is re-driven when the substrate comes back.
 - `needs-input` — a conflict or failure hinges on a decision only a human can make. State it and stop. Omit `blocker`.
 - `needs-human-work` — the blocker is real and beyond an agent (an infra/secret the branch cannot change). Name it in the `blocker` object above, per the exit contract below — you post no board marker yourself; the loop copies the four fields from your record onto the `deploy-failed` marker it posts, so the evidence reaches the ticket. A missing push credential is NOT such a blocker — see "Why you do NOT push".
 
