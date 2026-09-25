@@ -448,7 +448,16 @@ func handleCleanStageEnding(ctx context.Context, exit RunExit, commenter tracker
 	_, state := latestStageState(exit.Comments, exit.Stage)
 	clean := state == BoardDone
 	if !clean && !endedDeliberately(exit.Comments, exit.Stage, state) {
-		return false
+		// The planner's deliverable and its handoff are two tracker writes, and a
+		// run that died between them left the deliverable — the thing the next
+		// stage needs — already on the ticket. Complete the handoff rather than
+		// redding the card and re-planning what is already planned (SC-5090).
+		// Checked LAST of the three clean endings on purpose: a deliberate pause
+		// or a terminal determination is a decision about the ticket and must
+		// never be overwritten by a handoff posted from a plan comment.
+		if !completePlanningHandoff(ctx, exit, commenter, deps) {
+			return false
+		}
 	}
 	// A clean finish clears the automatic-retry budget: the next failure on this
 	// stage is a fresh problem and deserves its own attempts, not the remainder
@@ -460,6 +469,56 @@ func handleCleanStageEnding(ctx context.Context, exit RunExit, commenter tracker
 	if clean && exit.Stage == BoardImplementation {
 		chainReviewAfterCleanBuild(ctx, exit, commenter, deps)
 	}
+	return true
+}
+
+// planAttachedAfterStart reports whether a [human:plan] comment on this thread
+// is newer than the planning stage's newest [human:planning-started] — the plan
+// belongs to the run that just ended, not to an earlier one a re-plan
+// superseded. With no planning-started at all, any plan comment counts: there is
+// no earlier dispatched run for it to have come from.
+//
+// It reads the plan comment WITHOUT classifying it. [human:plan] is content, not
+// a stage signal (PlanCommentHeader), and it is a transition marker inside the
+// self-planning fix run (pipeline-fsm.json fix-plan-written), so adding it to
+// orderedMarkerSpecs would change what it means everywhere. The fact is read
+// here, for the one stage it decides.
+func planAttachedAfterStart(comments []tracker.Comment) bool {
+	plan, ok := latestCommentWithHeader(comments, PlanCommentHeader)
+	if !ok {
+		return false
+	}
+	started, ok := latestCommentWithHeader(comments, PlanningStartedHeader)
+	if !ok {
+		return true
+	}
+	return commentNewer(plan, started)
+}
+
+// completePlanningHandoff posts [human:plan-ready] on a dead planning run's
+// behalf when its plan is already attached, and reports whether it did.
+//
+// Posting rather than merely suppressing the failure is the point: markers are
+// what advance a card, so a suppressed failure would leave it derived at
+// planning/running with no live agent — which the durable pass then reds anyway.
+// A failed post returns false so the caller judges the exit exactly as it does
+// today: a card running behind a dead agent with nothing on the thread is worse
+// than a red one.
+func completePlanningHandoff(ctx context.Context, exit RunExit, commenter tracker.Commenter, deps FailureDeps) bool {
+	if exit.Stage != BoardPlanning || !planAttachedAfterStart(exit.Comments) {
+		return false
+	}
+	body := planHandoffCompletedBody()
+	if _, err := commenter.AddComment(ctx, exit.PMKey, body); err != nil {
+		deps.Logger.Warn().Err(err).Str("pm", exit.PMKey).Str("agent", exit.AgentName).
+			Msg("board failure: cannot complete the planning handoff; judging the exit as an incomplete stage")
+		return false
+	}
+	deps.Logger.Info().Str("pm", exit.PMKey).Str("agent", exit.AgentName).
+		Msg("board failure: the planning run attached its plan and exited without the handoff; posted it on the run's behalf")
+	// The thread as the transition layer will see it, for the same reason the
+	// failed-marker path appends its own post (SC-5104).
+	exit.Comments = append(exit.Comments, tracker.Comment{Body: body, Created: time.Now()})
 	return true
 }
 
@@ -963,6 +1022,11 @@ func isTerminalResolution(body string) bool {
 // marker after routing on recordedOutage — so this only ever sees the stage's
 // still-running *-started marker and returns unsettled after the bounded
 // re-check budget, exactly as it would for any incomplete stage.
+//
+// A planning exit whose plan is attached but whose handoff is missing is
+// deliberately NOT settled here: the full re-check budget is the propagation
+// chance that keeps completePlanningHandoff from posting a second handoff over
+// one the run itself made (SC-5090).
 func stageSettled(comments []tracker.Comment, stage BoardStage) bool {
 	_, state := latestStageState(comments, stage)
 	if state != BoardDone && state != BoardResolved && !stagePausedOnOptions(comments, stage) && !deliberateStopRecorded(comments) {

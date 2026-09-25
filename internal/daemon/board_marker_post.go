@@ -115,6 +115,25 @@ func RunCancelledBody(stage BoardStage, agentName string) string {
 	}, "stage", "agent")
 }
 
+// planHandoffCompletedSentinel is pinned so a reader can always tell the
+// daemon's completion of a stranded planning handoff from the planner's own
+// post — the same reason shippedOutOfBandSentinel is pinned. A reword of the
+// prose below must not silently change what the sentinel matches.
+const planHandoffCompletedSentinel = "completed from the plan already attached"
+
+// planHandoffCompletedBody renders the [human:plan-ready] marker the daemon
+// posts for a planning run that attached its plan and died before its own
+// handoff (SC-5090). It carries NO engineering: field on purpose — the daemon
+// cannot know an engineering key it never saw created, so this completion is
+// single-tracker only and a split-topology run still has to post its own.
+func planHandoffCompletedBody() string {
+	return markerBody(marker.Marker{
+		Type: MarkerPlanReady,
+		Body: "the planning run attached its plan and exited before posting this handoff, so the daemon " +
+			planHandoffCompletedSentinel + " rather than judging the stage failed and re-planning it",
+	})
+}
+
 // optionsMarker composes a decision block — the stage that resumes once it is
 // answered, the context that raised it, and one field per answer — and returns
 // the field order alongside it.

@@ -123,9 +123,15 @@ const (
 	// working agent dead (SC-3853). Informational only: it decorates the
 	// ticket's history and never moves the card (see LateResultReconciledBody).
 	MarkerLateResultReconciled = "late-result-reconciled"
+	// MarkerPlanReady is the planning stage's handoff. It has a type constant of
+	// its own because the DAEMON now composes it too: a planning run whose plan
+	// is on the ticket but whose handoff never landed is completed on its behalf
+	// rather than reddened (SC-5090), and a marker the daemon writes goes through
+	// marker.Validate like every other.
+	MarkerPlanReady = "plan-ready"
 
 	PlanningStartedHeader       = "[human:planning-started]"
-	PlanReadyHeader             = "[human:plan-ready]"
+	PlanReadyHeader             = "[human:" + MarkerPlanReady + "]"
 	PlanningFailedHeader        = "[human:" + MarkerPlanningFailed + "]"
 	ImplementationStartedHeader = "[human:implementation-started]"
 	ImplementationFailedHeader  = "[human:" + MarkerImplementationFailed + "]"
