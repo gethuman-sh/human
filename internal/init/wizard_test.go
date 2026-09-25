@@ -20,6 +20,7 @@ import (
 
 	"github.com/gethuman-sh/human/internal/claude"
 	"github.com/gethuman-sh/human/internal/config"
+	"github.com/gethuman-sh/human/internal/proxy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1278,6 +1279,26 @@ func TestGenerateProxyYAML_WithIntercept(t *testing.T) {
 	yaml := generateProxyYAML(true)
 	assert.Contains(t, yaml, "intercept:")
 	assert.Contains(t, yaml, "api.anthropic.com")
+}
+
+// TestDefaultProxyDomains_AllowsGitHubApex runs the shipped default list
+// through the real matcher. The wildcard entry is DNS-style and never covers
+// the apex, while git remotes live on the bare host — so a list carrying only
+// "*.github.com" ships containers that cannot fetch (SC-5593).
+func TestDefaultProxyDomains_AllowsGitHubApex(t *testing.T) {
+	p, err := proxy.NewPolicy(proxy.ModeAllow, DefaultProxyDomains)
+	require.NoError(t, err)
+
+	assert.True(t, p.Allowed("github.com"), "git remotes live on the apex host")
+	assert.True(t, p.Allowed("api.github.com"), "the wildcard entry must still cover subdomains")
+}
+
+// TestGenerateProxyYAML_ListsGitHubApexEntry checks the apex reaches the
+// written .humanconfig.yaml as its own entry: asserting on the substring
+// "github.com" alone would pass on "*.github.com".
+func TestGenerateProxyYAML_ListsGitHubApexEntry(t *testing.T) {
+	yaml := generateProxyYAML(false)
+	assert.Contains(t, yaml, "\n    - \"github.com\"")
 }
 
 // --- VaultStep tests ---
