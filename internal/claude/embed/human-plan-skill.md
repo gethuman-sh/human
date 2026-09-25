@@ -192,18 +192,26 @@ PLAN_EOF
 human marker post <PM_KEY> plan-ready
 ```
 
-In this topology the plan header needs no `**Engineering ticket**:` line, and commits reference only the PM key. `<PM_KEY>` is the original PM ticket key from the plan's `**PM ticket**:` header. This mirrors the `[human:ready-for-review]` handoff that `human-executor` posts after implementation.
+In this topology the plan header needs no `**Engineering ticket**:` line, and commits reference only the PM key — no `engineering:` field on the handoff either; the board dispatches Implementation on the PM key itself. `<PM_KEY>` is the original PM ticket key from the plan's `**PM ticket**:` header. This mirrors the `[human:ready-for-review]` handoff that `human-executor` posts after implementation.
 
 ## Phase 6: Confirm both landed
 
-Verify both writes landed before doing anything else — verification, state records, reporting:
+Verify both writes landed before doing anything else — verification, state records, reporting. Which check verifies the plan write depends on topology, same as Phase 5:
 
-```bash
-human plan show <PM_KEY>                      # must print the plan back
-human marker list <PM_KEY> | grep plan-ready  # must print the handoff
-```
+- **Single-tracker topology** — the plan is the `[human:plan]` comment from Phase 5b:
 
-Re-planning posts a new `[human:plan]` comment; the latest wins, never edit old ones.
+  ```bash
+  human plan show <PM_KEY>                      # must print the plan back
+  human marker list <PM_KEY> | grep plan-ready  # must print the handoff
+  ```
+
+  Re-planning posts a new `[human:plan]` comment; the latest wins, never edit old ones.
+
+- **Split topology** — there is no `[human:plan]` comment on the PM ticket; the plan is the engineering ticket's description, and `human plan show <PM_KEY>` finds nothing to print and fails. The verification that applies here is Phase 5a's byte-for-byte description check, already done before the handoff was posted:
+
+  ```bash
+  human marker list <PM_KEY> | grep plan-ready  # must print the handoff
+  ```
 
 **This marker is what finishes a planning run.** Attaching the plan in Phase 5
 does not advance the card and neither does any state record — a plan comment is
