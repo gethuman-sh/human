@@ -32,6 +32,16 @@ var ErrDeployVerdictBlocks = stderrors.New("the review verdict blocks the deploy
 // override rather than passed off as a reviewed merge.
 var ErrDeployReviewUnavailable = stderrors.New("the machine pull-request review cannot run here")
 
+// ErrDeployCheckoutBusy is the fourth non-failure refusal, and the only one
+// about the machine rather than the ticket's own state: the implementation
+// container for this ticket is still alive in the checkout the deploy pushes
+// from. The deploy WAITS for it first (awaitCheckoutFree) and returns this only
+// once DeployCheckoutWaitBound is spent, so reaching it means the container is
+// hung rather than merely finishing — which is the stuck-running sweep's to
+// answer, not the deploy's. Like its three siblings it posts no marker and reds
+// no card (SC-5691).
+var ErrDeployCheckoutBusy = stderrors.New("the implementation container still holds the checkout")
+
 // StartDeployRequest is what a deploy needs to know before it runs.
 type StartDeployRequest struct {
 	PMKey  string
@@ -95,6 +105,10 @@ type StartDeployResult struct {
 // here: they are continuations of a deploy the Done stage already recorded as
 // [human:pr-review-started], not starts. A new route that begins a deploy belongs
 // here, not on the engine.
+//
+// It also owes the ticket the checkout interlock: this process must not push
+// into the checkout while the implementation container that built the branch is
+// still alive in it (SC-5691).
 func (d BoardTransitionDeps) StartDeploy(ctx context.Context, req StartDeployRequest) (StartDeployResult, error) {
 	comments, err := d.Commenter.ListComments(ctx, req.PMKey)
 	if err != nil {
@@ -128,6 +142,14 @@ func (d BoardTransitionDeps) StartDeploy(ctx context.Context, req StartDeployReq
 		return StartDeployResult{}, errors.WrapWithDetails(ErrDeployReviewUnavailable,
 			"deploy refused: this host cannot launch the machine reviewer right now — see `human doctor` for the blocker, fix it and re-run, or re-run with --ready to ship without the review",
 			"pm", req.PMKey)
+	}
+	// The checkout interlock, before the start marker and before anything is
+	// pushed, like the three refusals above: a deploy that never began must not
+	// record a start. It is NOT skipped by --ready — that flag overrides the
+	// machine review, and the engine it runs writes to the same tree the
+	// implementation container holds (SC-5691).
+	if err := d.awaitCheckoutFree(ctx, req.PMKey); err != nil {
+		return StartDeployResult{}, err
 	}
 	if err := d.recordDeployStart(ctx, req, override); err != nil {
 		return StartDeployResult{}, err

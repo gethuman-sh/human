@@ -134,7 +134,7 @@ human <TRACKER> issue comment list <TICKET_KEY>
    SUMMARY_EOF
    ```
 
-   Fill every section from what actually happened in THIS run — never leave template placeholders in the posted comment. If posting the summary fails, carry on: the handoff is what the pipeline needs, the summary is what the human needs. Then summarize in your final message: files created, files modified, done verdict, and the marker/handoff you posted.
+   Fill every section from what actually happened in THIS run — never leave template placeholders in the posted comment. If posting the summary fails, carry on: the handoff is what the pipeline needs, the summary is what the human needs. Then summarize in your final message: files created, files modified, done verdict, and the marker/handoff you posted. That summary is the run's last act — nothing follows it (see 'The end of the run').
 
 ## Retry budget and flakes
 
@@ -165,6 +165,8 @@ Infrastructure trouble is never a real attempt — it is a `retryable` ending, n
 ## Completion invariant
 
 A run never ends with the card in a non-terminal state AND no live agent. The only acceptable ends are (a) deployed/closed, (b) an explicit needs-human marker that names the specific unresolved blocker — never a silent frozen card, or (c) a deploy refused because an open `[human:options]` decision is waiting: report it as `needs-input` and leave the card paused — it is neither a failure nor a card to force. A transient tool failure (e.g. a racy merge 405 while the forge reconciles fresh checks, or a 409 "head is out of date" because a sibling deploy landed first) is NOT terminal: the deploy tool runs a bounded recovery ladder and retries it internally, so do not treat the first tool failure as the end of the job. Only a `[human:deploy-failed]` posted after that ladder is exhausted — with the named blocker — is a legitimate terminal needs-human end state; when you see it, STOP honestly (do not merge by hand, do not re-implement the reviewed work) rather than leaving the card stuck.
+
+<!-- human:include run-end -->
 
 ## Principles
 

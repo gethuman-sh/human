@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -163,12 +164,44 @@ func TestLaunchDeployFixAgent_LaunchGateSkipsLaunch(t *testing.T) {
 		return []DoctorCheck{{ID: "claude-auth", Name: "Claude authentication", OK: false, Detail: "session expired"}}
 	}
 
-	launched, err := deps.launchDeployFixAgent(context.Background(), "SC-1", "/human-deploy-fix SC-1")
+	launched, err := deps.launchDeployFixAgent(context.Background(), "SC-1", "/human-deploy-fix SC-1", 0)
 
 	require.ErrorIs(t, err, ErrLaunchGateRefused, "a gate refusal is reported, so no caller mistakes it for a fixer already running")
 	assert.False(t, launched)
 	assert.Zero(t, l.calls, "gated daemon must not launch")
 	assert.Empty(t, c.added, "gated daemon must post no started or failed marker")
+}
+
+// SC-3640: a launch failure that follows earlier rounds states their count.
+func TestLaunchDeployFixAgent_LaunchFailureStatesTheRounds(t *testing.T) {
+	c := &fakeCommenter{}
+	l := &fakeLauncher{err: errors.New("container host refused")}
+	deps := newDeps(c, l, &fakeDeployer{})
+
+	_, err := deps.launchDeployFixAgent(context.Background(), "SC-1", "/human-deploy-fix SC-1", 1)
+
+	require.Error(t, err)
+	body, ok := posted(c, DeployFailedHeader)
+	require.True(t, ok)
+	assert.Contains(t, body, "could not launch the deploy fixer")
+	assert.Contains(t, body, "container host refused")
+	assert.Contains(t, body, "1 automated fix round ran before this.")
+}
+
+// A first-round launch failure claims no rounds — the existing wording stands.
+func TestLaunchDeployFixAgent_FirstRoundLaunchFailureClaimsNone(t *testing.T) {
+	c := &fakeCommenter{}
+	l := &fakeLauncher{err: errors.New("container host refused")}
+	deps := newDeps(c, l, &fakeDeployer{})
+
+	_, err := deps.launchDeployFixAgent(context.Background(), "SC-1", "/human-deploy-fix SC-1", 0)
+
+	require.Error(t, err)
+	body, ok := posted(c, DeployFailedHeader)
+	require.True(t, ok)
+	assert.Contains(t, body, "could not launch the deploy fixer")
+	assert.Contains(t, body, "container host refused")
+	assert.NotContains(t, body, "automated fix round", "a first-round failure must claim no rounds")
 }
 
 // End to end through openDraftPRAndReview: a done-stage drag on a gated
@@ -231,11 +264,31 @@ func TestDispatchDeployFixer_RefusalPostsNoStartedMarker(t *testing.T) {
 	deps := newDeps(c, l, &fakeDeployer{})
 
 	require.NoError(t, deps.dispatchDeployFixer(context.Background(), "SC-1",
-		PRResult{URL: "https://example/pr/7", Number: 7}, "feat/x", "CI failed", false))
+		PRResult{URL: "https://example/pr/7", Number: 7}, "feat/x", "CI failed", false, 0))
 
 	assert.Equal(t, 1, l.calls)
 	assert.Empty(t, c.added)
 	assert.Zero(t, deployFixRounds(c.comments), "no round was spent on a fixer nobody started")
+}
+
+// SC-3640: a launch-gate refusal that follows earlier rounds states their
+// count on the deploy-failed card it is forced to post (the remedy could not
+// even be attempted, but automation had already tried).
+func TestDispatchDeployFixer_GateRefusedStatesTheRounds(t *testing.T) {
+	c := &fakeCommenter{}
+	deps, _ := reviewableDeps(c, &fakeDeployer{})
+	deps.LaunchGate = func(context.Context) []DoctorCheck {
+		return []DoctorCheck{{ID: "claude-auth", Name: "Claude authentication", OK: false, Detail: "login wiped"}}
+	}
+
+	err := deps.dispatchDeployFixer(context.Background(), "SC-1",
+		PRResult{Number: 7, URL: "u"}, "feat/x", "CI checks failed on the pull request", false, 1)
+
+	require.Error(t, err)
+	body, ok := posted(c, DeployFailedHeader)
+	require.True(t, ok)
+	assert.Contains(t, body, "CI checks failed on the pull request")
+	assert.Contains(t, body, "1 automated fix round ran before this.")
 }
 
 // The answer is recorded and consumed either way; with no started marker to

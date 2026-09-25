@@ -59,7 +59,9 @@ type TicketIdentity func(pmKey string) OwnerIdentity
 //     and participation and stops there. reconcileShippedFailures is the case:
 //     it asks the forge whether the PR merged, and the branch it would probe is
 //     DELETED at merge — gating it on reachability would filter out precisely the
-//     cards it exists to clear.
+//     cards it exists to clear. Its shippable re-drive arm DOES push a branch, so
+//     that arm checks reachability itself (branchActionableHere) rather than
+//     moving the whole pass behind a gate the merged arm must not have.
 type WorkGate struct {
 	// reachable reports whether a card's branch resolves on THIS machine (local
 	// ref or origin). nil disables the reachability arm — the "nil disables"

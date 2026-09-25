@@ -1133,7 +1133,7 @@ func TestDispatchDeployFixerAlreadyRunningIsNoOp(t *testing.T) {
 	l := &fakeLauncher{err: ErrAgentAlreadyRunning}
 	deps := newDeps(c, l, &fakeDeployer{})
 	err := deps.dispatchDeployFixer(context.Background(), "SC-1",
-		PRResult{URL: "https://example/pr/7", Number: 7}, "feat/x", "CI failed", false)
+		PRResult{URL: "https://example/pr/7", Number: 7}, "feat/x", "CI failed", false, 0)
 	require.NoError(t, err)
 	require.Equal(t, 1, l.calls, "the launch must have been attempted")
 	assert.Empty(t, c.added, "a refusal records neither a fresh round nor a failure")

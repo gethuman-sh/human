@@ -117,8 +117,9 @@ func (b *recoveryBackoff) reset() {
 // everything else was a person's click (SC-4244, SC-5170).
 //
 // What it leaves alone, and why: a done-stage failure (the deploy has its own
-// recovery — the shipped-failures probe and the deploy fixer — and a relaunch
-// here would re-run a merge); a stage whose agent is alive on this machine
+// recovery — the shipped-failures pass, which retires a merged PR and re-drives
+// one that has become mergeable with every check green, plus the deploy fixer —
+// and a relaunch here would re-run a merge); a stage whose agent is alive on this machine
 // (the relaunch already happened); a card paused on a decision (waiting on a
 // person is the one state the machine may not resolve); a silence-reap give-up
 // (the machine already said it will not relaunch); a standing plan-stuck

@@ -928,6 +928,29 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	prMerged := func(probeCtx context.Context, prURL string) (bool, error) {
 		return boardPRMerged(probeCtx, ds.srv.Projects, ds.vaultResolver, prURL)
 	}
+	// The second half of the done stage's recovery (SC-3640): a red card whose
+	// PR is not merged but has become mergeable with every check green is
+	// re-driven rather than left for a person to click. One ReadPullRequest
+	// answers both halves of "definitely shippable", and an unreadable answer is
+	// an error, never a false — the pass must leave such a card alone.
+	prShippable := func(probeCtx context.Context, prURL string) (bool, string, error) {
+		return boardPRShippable(probeCtx, ds.srv.Projects, ds.vaultResolver, prURL)
+	}
+	// The re-drive is the SAME transition the board's "Retry deploy" gesture
+	// issues — boardRetryTransition reports whether a launch actually happened,
+	// so a refusal that started nothing is never counted as a recovery.
+	redriveDeploy := func(pmKey string) (bool, error) {
+		// Same request shape as StageRetry.Relaunch (:882-888), for the same two
+		// reasons. From is unused by the in-place retry rules — isDeployRetry
+		// reads the CARD's derived stage and failed/outage state, not the
+		// request's From, and req.From is consulted only by the ideas guard —
+		// and PMTitle is unused on this route: openDraftPRAndReview titles the PR
+		// with the key, so the field that would need a tracker fetch is never
+		// read. Leaving it empty avoids one.
+		return boardRetryTransition(daemon.BoardTransitionRequest{
+			PMKey: pmKey, From: daemon.BoardDoneStage, To: daemon.BoardDoneStage,
+		})
+	}
 	postDeployed := func(postCtx context.Context, pmKey, prURL string) error {
 		commenter, err := boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID)()
 		if err != nil {
@@ -953,6 +976,8 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		IdentityFor:    boardTicketIdentity(ds.srv.Projects),
 		CommitsPresent: commitsPresent,
 		MergedProbe:    prMerged,
+		ShippableProbe: prShippable,
+		RetryDeploy:    redriveDeploy,
 		PostDeployed:   postDeployed,
 		LiveAgents:     liveBoardAgents,
 		StoppedAgents:  agent.StoppedBoardAgents,
@@ -3814,6 +3839,41 @@ func boardPRMerged(ctx context.Context, projects *daemon.ProjectRegistry, resolv
 	return reader.PullRequestMerged(ctx, repo, number)
 }
 
+// boardPRShippable reports whether the PR at prURL is definitely ready to ship
+// on the workspace's forge: mergeable, with every check it reports passing. A
+// forge that cannot read the state, or a URL with no parseable number, returns
+// (false, "", err) so the reconcile pass leaves the card untouched rather than
+// re-driving a deploy on an unknown state (SC-3640; the SC-910 rule, widened).
+// The head SHA travels alongside the verdict so the reconcile pass can pace
+// re-drives on the head rather than on whichever failure prompted the check
+// (SC-3640 round 2) — the number the ReadPullRequest call already answers.
+func boardPRShippable(ctx context.Context, projects *daemon.ProjectRegistry, resolver *vault.Resolver, prURL string) (shippable bool, headSHA string, err error) {
+	entry, err := projects.SoleEntry()
+	if err != nil {
+		return false, "", err
+	}
+	number, ok := forge.PullRequestNumberFromURL(prURL)
+	if !ok {
+		return false, "", errors.WithDetails("could not parse pull request number", "pr", prURL)
+	}
+	creator, repo, err := resolveForge(entry.Dir, entry.EnvLookup(), resolver)
+	if err != nil {
+		return false, "", err
+	}
+	reader, ok := creator.(forge.PullRequestReader)
+	if !ok {
+		return false, "", errors.WithDetails("forge does not support reading pull request state", "repo", repo)
+	}
+	state, err := reader.ReadPullRequest(ctx, repo, number)
+	if err != nil {
+		return false, "", err
+	}
+	if state == nil {
+		return false, "", errors.WithDetails("the forge returned no pull request state", "pr", prURL)
+	}
+	return daemon.PullRequestShippable(state), state.HeadSHA, nil
+}
+
 // errNoPMTracker is the one answer every PM resolver gives when the set does not
 // name a PM tracker. It states the remedy in the terms the config uses, because
 // the two ways to get here — no tracker at all, and several undeclared ones —
@@ -4273,6 +4333,14 @@ func boardTransitionDepsFor(reg *daemon.ProjectRegistry, pmKey string, resolver 
 			}
 			return slices.Contains(names, name)
 		},
+		// The deploy's checkout interlock reads the same running-agent metadata
+		// the reconcile pass and the failure watcher do (FailureDeps.LiveAgents,
+		// ReconcileDeps.LiveAgents), so all three answer "is that container still
+		// there" from one source. Unlike LoopStepAlive above, a listing failure
+		// here must NOT read as alive: that would stall every deploy for the whole
+		// wait bound on a docker hiccup, so the interlock treats an unusable
+		// answer as "not held" (SC-5691).
+		LiveAgents: liveBoardAgents,
 	}, nil
 }
 

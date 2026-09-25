@@ -95,6 +95,31 @@ type PRMergedProbe func(ctx context.Context, prURL string) (bool, error)
 // deploy-failed red. A nil poster disables the shipped-confirmation pass.
 type DeployedPoster func(ctx context.Context, pmKey, prURL string) error
 
+// PRShippableProbe reports whether the pull request at prURL is DEFINITELY
+// ready to ship: the forge reports it mergeable AND every check it reports has
+// passed. Distinct from PRMergedProbe (already landed) and from MergeReader's
+// bare mergeability — a merge verdict says nothing about CI, and the red this
+// answers is a CI red. An error means the state could not be read, and a caller
+// must leave the card exactly as it is: a recovery that fires on an unknown
+// state is the failure the !merged rule has always guarded against (SC-3640).
+// A nil probe disables the shippable arm ("nil disables").
+//
+// headSHA is the PR's current head commit, returned alongside the verdict so a
+// caller can pace re-drives on the head rather than on the failure that
+// prompted the check: the head is what "the pull request turned green" is
+// actually about, and it is the one signal that does not rotate merely because
+// a re-drive that started ended in another failure (SC-3640 round 2).
+type PRShippableProbe func(ctx context.Context, prURL string) (shippable bool, headSHA string, err error)
+
+// DeployRedrive re-drives the done stage for a card whose deploy failed — the
+// same in-place retry transition the board's "Retry deploy" gesture issues, so
+// every guard on that path (the idempotency drop, the open-decision refusal,
+// the draft interlock, the PR review that fronts the merge) applies unchanged.
+// It reports whether a re-drive actually STARTED, so a refusal that started
+// nothing is never logged or paced as though it had. A nil value disables the
+// shippable arm.
+type DeployRedrive func(pmKey string) (launched bool, err error)
+
 // LiveAgentLister returns the names of the board agents currently running on
 // THIS machine — the same source the zombie sweep reads. The stuck-running
 // reconcile pass uses it to tell a genuinely-working (slow) run from a
@@ -160,6 +185,12 @@ type ReconcileDeps struct {
 	IdentityFor    TicketIdentity
 	CommitsPresent CommitsPresent
 	MergedProbe    PRMergedProbe
+	// ShippableProbe and RetryDeploy are the second half of the done stage's own
+	// recovery: a red card whose PR is not merged but has become mergeable with
+	// every check green is re-driven rather than left for a person to click
+	// (SC-3640). Both nil keeps the pass exactly as it was — merged-only.
+	ShippableProbe PRShippableProbe
+	RetryDeploy    DeployRedrive
 	PostDeployed   DeployedPoster
 	LiveAgents     LiveAgentLister
 	StoppedAgents  StoppedAgentLister
@@ -286,8 +317,8 @@ func reconcileOnce(ctx context.Context, deps ReconcileDeps) {
 	if n := reconcileOrphanedHandoffs(gate.forReview(cards), deps, time.Now()); n > 0 {
 		logger.Info().Int("launched", n).Msg("board reconcile: chained review for orphaned handoffs")
 	}
-	if n := reconcileShippedFailures(ctx, gate.forOwnWork(cards), deps); n > 0 {
-		logger.Info().Int("cleared", n).Msg("board reconcile: confirmed shipped, cleared stale deploy-failed red")
+	if n := reconcileShippedFailures(ctx, gate.forOwnWork(cards), deps, time.Now()); n > 0 {
+		logger.Info().Int("cleared", n).Msg("board reconcile: cleared stale deploy-failed reds (shipped, or re-drove a shippable deploy)")
 	}
 	// The PR-loop re-drive runs BEFORE the stuck-running pass so a loop card
 	// stranded by a restart is re-driven rather than reddened — the stuck pass
@@ -1022,24 +1053,53 @@ func stuckRunningReason(stage BoardStage) string {
 	return "Stuck in " + string(stage) + ": no terminal marker and no live agent — needs attention"
 }
 
-// reconcileShippedFailures clears the 695-class stale red: a done-stage card
-// whose newest marker is a deploy-failure but whose PR the forge reports merged
-// (an out-of-band manual merge posted no marker). For each such card it posts a
-// [human:deployed] marker; DeriveBoardCard's existing supersession guard then
-// retires the failure on the next derivation. Reuses DeriveBoardCard verbatim so
-// detection can never disagree with the board's rendered state. nil deps disable
-// the pass. Returns the number of cards cleared.
+// shippableRedriveBackoff spaces the re-drive attempts on ONE pull request
+// HEAD. The arm has no upper time bound on purpose — a card red overnight with
+// a green PR is exactly what it exists to clear — so the pacing is what keeps
+// a re-drive that starts nothing, or that starts and ends in another failure
+// on the SAME head, to a handful of tries per head rather than one per tick.
+// Keyed on the head rather than on the failure that prompted the check: a
+// re-drive that starts always posts a fresh [human:deploy-failed] if it does
+// not merge, and a key built from that marker's timestamp (the original
+// SC-3640 shape) therefore never repeats and the backoff never engages — see
+// redriveShippableDeploy for the head-keyed replacement and the launched path,
+// which for the same reason must never clear this entry: "launched" answers
+// only whether the re-drive's goroutine started (runDoneStage returns before
+// openDraftPRAndReview's outcome is known), not whether it succeeded, so
+// treating it as success and clearing the entry reproduces the same hole one
+// call later. In memory like its sibling: the thread is the durable state,
+// this is only pacing.
+var shippableRedriveBackoff = newRecoveryBackoff(2*time.Minute, 30*time.Minute)
+
+// reconcileShippedFailures clears the 695-class stale red two ways: a done-stage
+// card whose newest marker is a deploy-failure but whose PR the forge reports
+// MERGED (an out-of-band manual merge posted no marker) is retired with a
+// [human:deployed] marker; one that is not merged but has become DEFINITELY
+// SHIPPABLE — mergeable, with every check passing — is re-driven instead, so a
+// pull request that turned green after the red no longer sits behind it until a
+// person notices (SC-3640). DeriveBoardCard's existing supersession guard
+// retires the marker's red on the next derivation either way. Reuses
+// DeriveBoardCard verbatim so detection can never disagree with the board's
+// rendered state. nil deps disable the corresponding arm. Returns the number of
+// cards cleared or re-driven.
 //
 // It takes the forOwnWork gate rather than the raw board: posting [human:deployed]
 // is a write on someone's ticket and must obey the ownership rule like every other
 // write (SC-4063). It must NOT take forReview — that arm demands a reachable
 // branch, and the branch of a merged PR is deleted at merge, so reachability would
-// filter out exactly the cards this pass exists to clear.
-func reconcileShippedFailures(ctx context.Context, drivable DrivableCards, deps ReconcileDeps) int {
+// filter out exactly the cards this pass exists to clear. The shippable re-drive
+// arm DOES push a branch, so it checks reachability itself (branchActionableHere)
+// rather than moving the whole pass behind a gate the merged arm must not have.
+func reconcileShippedFailures(ctx context.Context, drivable DrivableCards, deps ReconcileDeps, now time.Time) int {
 	logger := deps.Logger
 	if deps.MergedProbe == nil || deps.PostDeployed == nil {
 		return 0
 	}
+	// Read once per pass, like every other relaunching pass. Unusable (nil
+	// lister or a failed lookup) disables only the re-drive arm below: the
+	// merged arm posts a marker about work that has already landed and needs
+	// no liveness, while a re-drive over a live deploy is the SC-5396 class.
+	alive, aliveKnown := deps.aliveAgents("shippable-deploy recovery")
 	cleared := 0
 	for _, card := range drivable.cards {
 		derived := DeriveBoardCard(card.Comments, tracker.CategoryUnstarted, false)
@@ -1055,18 +1115,137 @@ func reconcileShippedFailures(ctx context.Context, drivable DrivableCards, deps 
 				Msg("board reconcile: cannot probe PR merge status, leaving card as-is")
 			continue
 		}
-		if !merged {
-			// A genuinely-open failure must stay red — never clear on unknown state.
+		if merged {
+			if err := deps.PostDeployed(ctx, card.Key, derived.PRURL); err != nil {
+				logger.Warn().Err(err).Str("pm", card.Key).
+					Msg("board reconcile: cannot post deployed marker for shipped PR")
+				continue
+			}
+			cleared++
 			continue
 		}
-		if err := deps.PostDeployed(ctx, card.Key, derived.PRURL); err != nil {
-			logger.Warn().Err(err).Str("pm", card.Key).
-				Msg("board reconcile: cannot post deployed marker for shipped PR")
-			continue
+		// Not merged is not "not shippable". The red was written from one
+		// observation and never re-read, so a pull request that turned green a
+		// minute later stayed red until a person noticed (SC-3640). The caution
+		// the !merged rule carried is unchanged and carries over verbatim: the
+		// arm below acts only on a DEFINITELY shippable state and never on an
+		// unknown one.
+		if redriveShippableDeploy(ctx, card, derived, deps, alive, aliveKnown, now) {
+			cleared++
 		}
-		cleared++
 	}
 	return cleared
+}
+
+// redriveShippableDeploy re-drives the deploy for one red done-stage card whose
+// pull request has since become definitely shippable. Reports whether a re-drive
+// started.
+//
+// It charges no stage-retry attempt. Every other recovery in this file relaunches
+// on a GUESS that another attempt might work and is bounded by DefaultStageRetries;
+// this one acts on positive evidence that the deploy is ready to ship, and a spent
+// budget must not keep a green, mergeable pull request behind a red card.
+func redriveShippableDeploy(ctx context.Context, card ReconcileCard, derived BoardCard,
+	deps ReconcileDeps, alive map[string]struct{}, aliveKnown bool, now time.Time) bool {
+	logger := deps.Logger
+	if deps.ShippableProbe == nil || deps.RetryDeploy == nil || !aliveKnown {
+		return false
+	}
+	branch, ok := deployRedriveEligible(card, derived, deps, alive, now)
+	if !ok {
+		return false
+	}
+	shippable, headSHA, err := deps.ShippableProbe(ctx, derived.PRURL)
+	if err != nil {
+		logger.Warn().Err(err).Str("pm", card.Key).Str("pr", derived.PRURL).
+			Msg("board reconcile: cannot probe whether the PR is shippable, leaving card as-is")
+		return false
+	}
+	if !shippable {
+		return false
+	}
+	// Keyed on the head, not on the failure marker: a re-drive that starts but
+	// does not merge posts its own fresh [human:deploy-failed], and pacing on
+	// THAT would reset every single cycle (SC-3640 round 2). A head that has
+	// not moved since the last attempt cannot produce a different outcome; one
+	// that has is genuinely new evidence and earns a fresh attempt even if the
+	// previous head's backoff has not elapsed.
+	key := card.Key + "/deploy-redrive/" + headSHA
+	if !shippableRedriveBackoff.due(key, now) {
+		return false
+	}
+	shippableRedriveBackoff.tried(key, now)
+	launched, err := deps.RetryDeploy(card.Key)
+	if err != nil {
+		logger.Warn().Err(err).Str("pm", card.Key).Str("branch", branch).
+			Msg("board reconcile: could not re-drive the deploy for a shippable PR")
+		return false
+	}
+	if !launched {
+		// A refusal started nothing — the card is where it was, and the backoff
+		// keeps the next try off the tick.
+		return false
+	}
+	// No clear() here on purpose: launched reports only that the re-drive's
+	// goroutine started (runDoneStage returns before openDraftPRAndReview's
+	// result is known), never that it shipped or even registered as live.
+	// Clearing on launch discarded the wait this call just recorded on every
+	// single re-drive, which is exactly how the backoff paced nothing (SC-3640
+	// round 2) — measured concretely for the case that matters: the launched
+	// work dies before ever posting a marker or a live agent, so
+	// deployRedriveEligible's liveStageAgent/DeployRun checks above see nothing
+	// and let the next tick straight through to this function again, leaving
+	// the backoff as the only thing standing between that and a re-drive per
+	// tick forever. Once the re-drive DOES register — a live agent, a running
+	// DeployRun, or a moved head — deployRedriveEligible or the head check
+	// above returns before this key is even consulted, so the stale entry left
+	// here is inert rather than load-bearing.
+	logger.Info().Str("pm", card.Key).Str("pr", derived.PRURL).Str("branch", branch).Str("head", headSHA).
+		Msg("board reconcile: the failed deploy's PR is mergeable with every check green; re-drove the deploy")
+	return true
+}
+
+// deployRedriveEligible is the pure half of the decision — what the thread and
+// this machine say about whether a re-drive is allowed at all — and returns the
+// branch the re-drive will run on. Kept separate from the forge probe so the
+// rules are testable without one.
+func deployRedriveEligible(card ReconcileCard, derived BoardCard, deps ReconcileDeps,
+	alive map[string]struct{}, now time.Time) (branch string, ok bool) {
+	// The newest done-stage marker must be the DEPLOY failure. A
+	// [human:pr-review-failed] card derives to (done, failed) too, and it is a
+	// verdict about the change's content — green CI does not answer it, and
+	// re-driving would relaunch a reviewer that just declined, every tick.
+	if !stageAlreadyFailed(card.Comments, BoardDoneStage) {
+		return "", false
+	}
+	// Waiting on a person is the one state the machine may not resolve.
+	if awaitingDecision(derived) || stagePausedOnOptions(card.Comments, BoardDoneStage) {
+		return "", false
+	}
+	// A live done-stage agent (reviewer, PR fixer, deploy fixer) owns this card;
+	// a deploy running in THIS process registers no agent, so the engine's own
+	// registry is the second half of the same question (SC-5396, SC-4150).
+	if _, live := liveStageAgent(alive, card.Key, BoardDoneStage); live {
+		return "", false
+	}
+	if deps.DeployRun != nil {
+		if _, running := deps.DeployRun(card.Key); running {
+			return "", false
+		}
+	}
+	// The live path acts first, as on every other durable recovery. There is no
+	// upper bound on purpose: a card nobody looked at overnight is the case.
+	state, failed := latestStateInStage(card.Comments, BoardDoneStage)
+	if state != BoardFailed || now.Sub(failed.Created) < FailedRecoveryGrace {
+		return "", false
+	}
+	// The re-drive PUSHES this branch (openDraftPR), so a machine that cannot
+	// resolve it would turn a stale red into a fresh push failure (SC-652).
+	branch = doneStageBranch(card.Comments, derived)
+	if branch == "" || !branchActionableHere(BoardCard{Branch: branch}, deps.Reachable) {
+		return "", false
+	}
+	return branch, true
 }
 
 // reconcileOrphanedHandoffs launches the missed review for every card whose

@@ -93,4 +93,20 @@ var ruleFamilies = []ruleFamily{
 			"human-pr-fixer-agent.md",
 		},
 	},
+	{
+		// SC-5691: the three prompts that own the implementation stage each
+		// defined their stop as steps to SKIP and none as an end state. With the
+		// review now inline, the deploy's green light lands mid-run, and a fix
+		// run read a later stage's failure marker off its own ticket and spent
+		// six unbudgeted minutes on it before posting a free-form comment
+		// nobody reads. The rule is one fragment because the gap was already
+		// present in three phrasings.
+		name:    "implementation-run-ends-at-its-summary",
+		include: "run-end",
+		members: []string{
+			"human-autofix-skill.md",
+			"human-security-fix-skill.md",
+			"human-executor-agent.md",
+		},
+	},
 }

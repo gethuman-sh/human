@@ -130,7 +130,7 @@ func TestReconcileShippedFailures_ClearsEvenWhenTheBranchIsGone(t *testing.T) {
 	merged := func(context.Context, string) (bool, error) { return true, nil }
 	post := func(context.Context, string, string) error { posted = true; return nil }
 
-	n := reconcileShippedFailures(context.Background(), gate.forOwnWork(cards), ReconcileDeps{MergedProbe: merged, PostDeployed: post})
+	n := reconcileShippedFailures(context.Background(), gate.forOwnWork(cards), ReconcileDeps{MergedProbe: merged, PostDeployed: post}, time.Now())
 
 	assert.Equal(t, 1, n)
 	assert.True(t, posted, "an unreachable branch must not hide a shipped PR")
