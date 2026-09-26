@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -25,6 +26,37 @@ import (
 // which is small-model work, and a per-project choice would be a knob nobody
 // has asked to turn (SC-5959).
 const feedbackModel = "haiku"
+
+// feedbackSystemPrompt replaces the CLI's default system prompt for the
+// briefing turn. The default one frames the model as a coding assistant in a
+// repository, and under it the small model answered with a preamble, a closing
+// remark or a paragraph after the sentinel — prose the launcher then carried
+// into the agent's prompt as advice (SC-6039). This one names the only two
+// shapes an answer may take.
+const feedbackSystemPrompt = "You distill review records into a short briefing for an automated engineering agent. " +
+	"Answer with the briefing lines only, each starting with \"- \", or with exactly NONE. " +
+	"No preamble, no closing remark, no headings."
+
+// feedbackTurnEnv switches the model's reasoning phase off for the briefing
+// turn. Measured on a real record (78 rows, 47KB): with it on, the small model
+// reasoned for 45 to 78 seconds and thousands of tokens before writing five
+// lines, so every launch overran the 30-second budget and launched without
+// the block; with it off the same answer takes 7 to 10 seconds (SC-6039). The
+// briefing is a summary of what is already in the prompt, not a problem to
+// solve, and a reasoning phase whose length scales with the record is exactly
+// what the budget cannot absorb.
+var feedbackTurnEnv = []string{"MAX_THINKING_TOKENS=0"}
+
+// feedbackTurnArgs strips the turn of everything but the prompt: no settings
+// (so no hooks — the host's SessionStart hooks alone loaded ~55K tokens of
+// memory and git history into each turn), no MCP servers, no session file
+// left behind, and a system prompt that names the answer's shape.
+var feedbackTurnArgs = []string{
+	"--setting-sources", "",
+	"--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`,
+	"--no-session-persistence",
+	"--system-prompt", feedbackSystemPrompt,
+}
 
 // launchAdvice is the daemon-wide half of the launch briefing: one handle on
 // the findings record, one host runner per project directory, and one cache
@@ -70,7 +102,7 @@ func (a *launchAdvice) depsFor(entry daemon.ProjectEntry, project string, ticket
 	}
 	return &daemon.FeedbackDeps{
 		Record:    a.record,
-		Runner:    hostFeedbackRunner{dir: entry.Dir, refusals: a.refusals, storeStamp: a.storeStamp},
+		Runner:    hostFeedbackRunner{refusals: a.refusals, storeStamp: a.storeStamp},
 		Project:   project,
 		Workspace: entry.Dir,
 		Ticket:    ticket,
@@ -127,22 +159,32 @@ func (a *launchAdvice) cacheFor(dir string) *daemon.FeedbackCache {
 // hostFeedbackRunner is one headless `claude -p` turn on the daemon host with
 // no tools at all: the briefing is written from the rows in the prompt and
 // nothing else, so the model has nothing to inspect and nothing to change. It
-// feeds the same refusal record as the description editor's turns, since a
-// rejected host login is visible only to a turn that tries it.
+// runs outside the project directory on purpose — in it, the CLI loads the
+// project's instruction files and the host's hooks, and the model then
+// reasons from that context instead of the record (SC-6039). It feeds the
+// same refusal record as the description editor's turns, since a rejected
+// host login is visible only to a turn that tries it.
 type hostFeedbackRunner struct {
-	dir        string
 	refusals   *claudeAuthRefusals
 	storeStamp func(context.Context) time.Time
 }
 
 // Run implements daemon.FeedbackRunner.
 func (r hostFeedbackRunner) Run(ctx context.Context, prompt string) (string, error) {
-	args := []string{"-p", prompt, "--output-format", "json", "--tools", "", "--model", feedbackModel}
-	turn, err := hostClaudeTurn(ctx, r.dir, args, r.refusals, r.storeStamp)
+	args := append([]string{"-p", prompt, "--output-format", "json", "--tools", "", "--model", feedbackModel}, feedbackTurnArgs...)
+	turn, err := hostClaudeTurn(ctx, hostTurn{dir: os.TempDir(), args: args, env: feedbackTurnEnv}, r.refusals, r.storeStamp)
 	if err != nil {
 		return "", err
 	}
 	return turn.Result, nil
+}
+
+// hostTurn is what one host `claude -p` invocation needs beyond the CLI's own
+// defaults. env is appended to the daemon's environment; nil inherits it.
+type hostTurn struct {
+	dir  string
+	args []string
+	env  []string
 }
 
 // hostClaudeTurn runs one `claude -p` invocation in dir and returns its parsed
@@ -154,9 +196,12 @@ func (r hostFeedbackRunner) Run(ctx context.Context, prompt string) (string, err
 // leaves stderr empty. So the JSON parse must run on both the success and the
 // ExitError path; stderr is only meaningful for true exec failures (binary
 // missing, process killed).
-func hostClaudeTurn(ctx context.Context, dir string, args []string, refusals *claudeAuthRefusals, storeStamp func(context.Context) time.Time) (claudeTurnOutput, error) {
-	cmd := exec.CommandContext(ctx, "claude", args...) // #nosec G204 -- fixed binary, prompt is a discrete argv element
-	cmd.Dir = dir
+func hostClaudeTurn(ctx context.Context, turn hostTurn, refusals *claudeAuthRefusals, storeStamp func(context.Context) time.Time) (claudeTurnOutput, error) {
+	cmd := exec.CommandContext(ctx, "claude", turn.args...) // #nosec G204 -- fixed binary, prompt is a discrete argv element
+	cmd.Dir = turn.dir
+	if len(turn.env) > 0 {
+		cmd.Env = append(os.Environ(), turn.env...)
+	}
 	out, err := cmd.Output()
 	var parsed claudeTurnOutput
 	parseErr := json.Unmarshal(out, &parsed)

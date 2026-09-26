@@ -59,6 +59,9 @@ const (
 	// feedbackTextRunes bounds one finding's text in the prompt so a single
 	// long review cannot crowd out the rest of the record.
 	feedbackTextRunes = 300
+	// feedbackMaxLines is the bound the prompt states and cleanFeedback
+	// enforces, so a model that does not count still yields a short block.
+	feedbackMaxLines = 10
 	// feedbackNone is the answer the model is told to give when the record
 	// says nothing relevant, so an empty block and a failed call look the same
 	// to the launcher: no block.
@@ -426,18 +429,36 @@ func cutRunes(s string, n int) string {
 	return s
 }
 
-// cleanFeedback normalises the model's answer: the sentinel and blank answers
-// become "", surrounding whitespace goes, and any code fence the model wrapped
-// the lines in is stripped so the block lands in the prompt as plain lines.
+// cleanFeedback reduces the model's answer to the advice lines. The prompt
+// asks for lines starting with "- " or the sentinel, and the model does not
+// always stop there: one answer opened with the sentinel and then explained
+// why, another prefaced the lines with what it was about to do, and the
+// launcher carried both into the agent's prompt as advice (SC-6039). So an
+// answer whose first line is the sentinel is none whatever follows it, and of
+// any other answer only the dashed lines count, at most feedbackMaxLines of
+// them; prose around them is not advice. Code fences are stripped first.
 func cleanFeedback(answer string) string {
 	s := strings.TrimSpace(answer)
 	s = strings.TrimPrefix(s, "```")
 	s = strings.TrimSuffix(s, "```")
-	s = strings.TrimSpace(s)
-	if s == "" || strings.EqualFold(s, feedbackNone) || strings.EqualFold(strings.TrimSuffix(s, "."), feedbackNone) {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	if isFeedbackNone(lines[0]) {
 		return ""
 	}
-	return s
+	var advice []string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "- ") || len(advice) == feedbackMaxLines {
+			continue
+		}
+		advice = append(advice, line)
+	}
+	return strings.Join(advice, "\n")
+}
+
+func isFeedbackNone(line string) bool {
+	line = strings.TrimSuffix(strings.TrimSpace(line), ".")
+	return strings.EqualFold(line, feedbackNone)
 }
 
 // FeedbackHeading introduces the block in a launch prompt. It follows the

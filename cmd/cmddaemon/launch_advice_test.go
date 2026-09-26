@@ -2,6 +2,7 @@ package cmddaemon
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -57,4 +58,18 @@ func TestLaunchAdvice_explainerFollowsTheLaunchPath(t *testing.T) {
 	require.NotNil(t, explain)
 	_, err = explain(daemon.FeedbackRequest{Key: "SC-1", Stage: daemon.BoardPlanning})
 	require.Error(t, err, "a key no registered project owns is refused, not answered from nowhere")
+}
+
+// The briefing turn must see the record and nothing else, and must not
+// reason its way past the launch budget (SC-6039): no project directory, no
+// settings (hence no hooks), no MCP servers, no session file, the answer's
+// shape fixed by the system prompt, and the reasoning phase switched off.
+func TestHostFeedbackRunner_turnIsContextFreeAndUnreasoned(t *testing.T) {
+	assert.Contains(t, feedbackTurnEnv, "MAX_THINKING_TOKENS=0")
+	joined := strings.Join(feedbackTurnArgs, "\x00")
+	for _, flag := range []string{"--setting-sources\x00", "--strict-mcp-config", "--mcp-config\x00{\"mcpServers\":{}}", "--no-session-persistence", "--system-prompt\x00" + feedbackSystemPrompt} {
+		assert.Contains(t, joined, flag)
+	}
+	assert.Contains(t, feedbackSystemPrompt, "NONE", "the sentinel the cleaner looks for is the one the model is told")
+	assert.Contains(t, feedbackSystemPrompt, `"- "`, "the line prefix the cleaner keeps is the one the model is told")
 }
