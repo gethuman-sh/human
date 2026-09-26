@@ -3,6 +3,7 @@ package gotoolchain
 import (
 	"context"
 	"errors"
+	"go/version"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -102,4 +103,7 @@ func TestOSProber_Installed(t *testing.T) {
 	out, err := OSProber{}.Installed(context.Background())
 	require.NoError(t, err)
 	require.NotEmpty(t, out)
+	// A prober returning garbage Check would call undecidable must not pass
+	// silently — assert it is a real version, not merely non-empty.
+	require.True(t, version.IsValid("go"+out), "Installed returned %q, not a valid version", out)
 }
