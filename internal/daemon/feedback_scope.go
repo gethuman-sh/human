@@ -162,6 +162,11 @@ func gitChangedFiles(ctx context.Context, workspace, branch string) ([]string, e
 func git(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...) // #nosec G204 -- fixed binary; args are this file's literals plus a branch name the daemon itself composed
 	cmd.Dir = dir
+	// A credential prompt would otherwise block on stdin forever, past the
+	// context deadline: cmd.Wait() only returns once the process exits, and a
+	// prompt with no terminal attached never does. GIT_TERMINAL_PROMPT=0 makes
+	// git fail fast instead of prompting (SC-5959).
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.Output()
 	return string(out), err
 }

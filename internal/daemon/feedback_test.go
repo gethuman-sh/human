@@ -116,6 +116,71 @@ func TestFeedbackAdvice_failuresLaunchWithoutAdvice(t *testing.T) {
 	assert.Empty(t, f.Advice(context.Background(), "SC-1", BoardPlanning, ""), "a timeout is a missing block, never a stalled launch")
 }
 
+// hangingGetter never returns until its context is cancelled, standing in for
+// a stalled tracker call.
+type hangingGetter struct{ reached chan struct{} }
+
+func (h hangingGetter) GetIssue(ctx context.Context, _ string) (*tracker.Issue, error) {
+	close(h.reached)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestFeedbackAdvice_hangingTicketReadStillRespectsTheTimeout(t *testing.T) {
+	store := newFeedbackStore(t)
+	seedFinding(t, store, "", "SC-9", "a.go", "tests", "untested")
+
+	reached := make(chan struct{})
+	f := &FeedbackDeps{
+		Record:  store,
+		Runner:  &countingRunner{answer: "- advice"},
+		Ticket:  hangingGetter{reached: reached},
+		Timeout: 10 * time.Millisecond,
+	}
+	start := time.Now()
+	block := f.Advice(context.Background(), "SC-1", BoardPlanning, "")
+	elapsed := time.Since(start)
+
+	select {
+	case <-reached:
+	default:
+		t.Fatal("scope never reached the hanging ticket read")
+	}
+	assert.Empty(t, block, "a scope that cannot resolve leaves the block empty rather than waiting")
+	assert.Less(t, elapsed, 2*time.Second,
+		"build must bound scope's own reads by the timeout, not just the model call")
+}
+
+func TestFeedbackAdvice_hangingBranchDiffStillRespectsTheTimeout(t *testing.T) {
+	store := newFeedbackStore(t)
+	seedFinding(t, store, "", "SC-9", "a.go", "tests", "untested")
+
+	reached := make(chan struct{})
+	f := &FeedbackDeps{
+		Record:    store,
+		Runner:    &countingRunner{answer: "- advice"},
+		Workspace: "/ws",
+		Timeout:   10 * time.Millisecond,
+		ChangedFiles: func(ctx context.Context, _, _ string) ([]string, error) {
+			close(reached)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+	start := time.Now()
+	block := f.Advice(context.Background(), "SC-1", prFixAgentStage, "autofix/sc-1")
+	elapsed := time.Since(start)
+
+	select {
+	case <-reached:
+	default:
+		t.Fatal("scope never reached the hanging branch diff read")
+	}
+	assert.Empty(t, block, "a scope that cannot resolve leaves the block empty rather than waiting")
+	assert.Less(t, elapsed, 2*time.Second,
+		"build must bound the PR stages' git fetch by the timeout, not just the model call")
+}
+
 func TestWithFeedback_keepsTheDispatchLineFirst(t *testing.T) {
 	assert.Equal(t, "/human-execute SC-1", withFeedback("/human-execute SC-1", ""))
 	got := withFeedback("/human-execute SC-1\n", "- a.go [tests]: add the test")
@@ -220,6 +285,21 @@ func TestGitChangedFiles_listsTheBranchAgainstTheRemoteDefault(t *testing.T) {
 
 	_, err = gitChangedFiles(ctx, ws, "no-such-branch")
 	assert.Error(t, err)
+}
+
+// TestGit_disablesTheTerminalPrompt guards against a credential-helper prompt
+// blocking the fetch past its context deadline: git only fails fast on a
+// missing credential when GIT_TERMINAL_PROMPT=0 is set, instead of blocking on
+// stdin with no terminal ever attached to answer it (SC-5959).
+func TestGit_disablesTheTerminalPrompt(t *testing.T) {
+	dir := t.TempDir()
+	fakeGit := filepath.Join(dir, "git")
+	require.NoError(t, os.WriteFile(fakeGit, []byte("#!/bin/sh\necho \"GIT_TERMINAL_PROMPT=$GIT_TERMINAL_PROMPT\"\n"), 0o700))
+	t.Setenv("PATH", dir)
+
+	out, err := git(context.Background(), dir, "status")
+	require.NoError(t, err)
+	assert.Equal(t, "GIT_TERMINAL_PROMPT=0\n", out)
 }
 
 func TestLaunchAgent_appendsTheAdviceAfterTheDispatchLine(t *testing.T) {

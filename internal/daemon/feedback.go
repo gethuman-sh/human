@@ -168,8 +168,21 @@ func (c *FeedbackCache) put(k feedbackKey, block string) {
 	c.blocks[k] = block
 }
 
-// build reads the record for one launch and asks the model once.
+// build reads the record for one launch and asks the model once. The whole
+// method — scope (ticket/comment reads and, for the PR stages, a git fetch),
+// gather and the model call — runs under one FeedbackTimeout-bounded context
+// so a stalled remote call cannot hold a launch past the budget the launch
+// prompt itself advertises: build used to bound only the model call, leaving
+// scope's ticket, comment and git-fetch reads on the caller's own context —
+// context.Background() from ApplyTransition — unbounded (SC-5959).
 func (f *FeedbackDeps) build(ctx context.Context, key string, stage BoardStage, branch string) string {
+	timeout := f.Timeout
+	if timeout <= 0 {
+		timeout = FeedbackTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	scope := f.scope(ctx, key, stage, branch)
 	rows, counts, err := f.gather(ctx, scope.files)
 	if err != nil {
@@ -180,13 +193,7 @@ func (f *FeedbackDeps) build(ctx context.Context, key string, stage BoardStage, 
 		return ""
 	}
 	prompt := feedbackPrompt(key, scope.title, stage, scope.files, rows, counts)
-	timeout := f.Timeout
-	if timeout <= 0 {
-		timeout = FeedbackTimeout
-	}
-	callCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	answer, err := f.Runner.Run(callCtx, prompt)
+	answer, err := f.Runner.Run(ctx, prompt)
 	if err != nil {
 		f.Logger.Warn().Err(err).Str("pm", key).Str("stage", string(stage)).
 			Msg("launch advice: model call failed; launching without it")
