@@ -14,6 +14,7 @@ import (
 
 	humanerrors "github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/forge"
+	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
 	"github.com/gethuman-sh/human/internal/vault"
 )
@@ -2306,8 +2307,11 @@ func TestAdvanceDeployFix_NeedsInput_Reds(t *testing.T) {
 	assert.Contains(t, failed, "needs a human decision")
 }
 
-// An unrecorded (empty) exit — a crashed fixer — reds via the default escalation
-// branch rather than proceeding on a state the driver cannot read (AD5).
+// An unrecorded (empty) exit with Unconfirmed left false is now a fixer that
+// REPORTED this round with no usable exit — SC-5554 splits that from a fixer
+// that recorded NOTHING (Unconfirmed true, tested below): the recorded-but-
+// unclassifiable case still reds via the default escalation branch rather than
+// proceeding on a state the driver cannot read (AD5).
 func TestAdvanceDeployFix_UnrecordedExit_Reds(t *testing.T) {
 	c := &fakeCommenter{comments: deployFixReadyComments()}
 	p := &fakeDeployer{}
@@ -2324,6 +2328,122 @@ func TestAdvanceDeployFix_UnrecordedExit_Reds(t *testing.T) {
 	}
 	require.NotEmpty(t, failed)
 	assert.Contains(t, failed, "stopped without recovering the deploy")
+}
+
+// SC-5554 review note 1 / verify-gap 2: an undecodable stage.deploy-fix
+// record must never reach this arm carrying the exit it half-decoded.
+// AdvanceDeployFix trusts DeployFixReport.Exit completely and has no
+// unreadable flag of its own to gate on, so a fixture built by hand at this
+// layer (DeployFixReport{}) can only pin what AdvanceDeployFix does with an
+// EMPTY report — indistinguishable from TestAdvanceDeployFix_UnrecordedExit_Reds
+// above, and no proof the reader itself zeroes a half-decoded record. That
+// proof needs readDeployFixReport AND AdvanceDeployFix in the same test, and
+// only cmd/cmddaemon can reach both:
+// TestAdvanceDeployFix_readerToArm_undecodableRecordNeverReachesTheDoneArm in
+// cmd/cmddaemon/pr_loop_reader_integration_test.go is the real regression.
+
+// SC-5554: a fixer that died without recording THIS round's dispatch —
+// Unconfirmed true — is re-dispatched within the deploy-fix bound rather than
+// redding the card. The re-dispatch carries the SAME failure headline the dead
+// round was sent to fix.
+func TestAdvanceDeployFix_deadFixerReRunsTheRound(t *testing.T) {
+	c := &fakeCommenter{comments: append(deployFixReadyComments(),
+		cmt(markerBody(marker.Marker{
+			Type:   MarkerDeployFixStarted,
+			Fields: fields("pr", "https://example/pr/7", "number", "7", "branch", "feat/x"),
+			Body:   "CI checks failed on the pull request (failing: frontend-test)",
+		}, "pr", "number", "branch"), time.Unix(3, 0)),
+	)}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+
+	err := deps.AdvanceDeployFix(context.Background(), "SC-1", DeployFixReport{Unconfirmed: true})
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, l.calls)
+	assert.Equal(t, "/human-deploy-fix SC-1 --pr=7 --branch=feat/x", l.prompt)
+	var started, failed string
+	for _, b := range c.added {
+		if strings.HasPrefix(b, DeployFixStartedHeader) {
+			started = b
+		}
+		if strings.HasPrefix(b, DeployFailedHeader) {
+			failed = b
+		}
+	}
+	require.NotEmpty(t, started, "the re-dispatch charges a fresh deploy-fix-started round")
+	assert.Contains(t, started, "CI checks failed on the pull request (failing: frontend-test)",
+		"the re-dispatch points at the SAME failure the dead round was sent to fix")
+	assert.Empty(t, failed, "no red while a round is still available")
+}
+
+// Once the deploy-fix bound is spent, the same dead fixer reds the card
+// instead — naming the death, not the generic stalled-fixer line.
+func TestAdvanceDeployFix_deadFixerAtTheBudgetRedsNamingTheDeath(t *testing.T) {
+	comments := deployFixReadyComments()
+	for i := 0; i < DefaultDeployFixRounds; i++ {
+		comments = append(comments, cmt(markerBody(marker.Marker{
+			Type:   MarkerDeployFixStarted,
+			Fields: fields("pr", "https://example/pr/7", "number", "7", "branch", "feat/x"),
+			Body:   "CI checks failed on the pull request (failing: frontend-test)",
+		}, "pr", "number", "branch"), time.Unix(int64(3+i), 0)))
+	}
+	c := &fakeCommenter{comments: comments}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+
+	err := deps.AdvanceDeployFix(context.Background(), "SC-1", DeployFixReport{Unconfirmed: true})
+	require.NoError(t, err)
+
+	assert.Zero(t, l.calls, "the bound is spent; no further relaunch")
+	var failed string
+	for _, b := range c.added {
+		if strings.HasPrefix(b, DeployFailedHeader) {
+			failed = b
+		}
+	}
+	require.NotEmpty(t, failed)
+	assert.Contains(t, failed, "died before recording an outcome")
+}
+
+// A thread with no deploy-fix-started marker at all had no round dispatched:
+// relaunchDeadDeployFixer declines (handled=false) and the caller's ordinary
+// red runs instead — nothing to re-run against PR 0.
+func TestAdvanceDeployFix_deadFixerWithNoDispatchMarkerReds(t *testing.T) {
+	c := &fakeCommenter{comments: deployFixReadyComments()}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+
+	err := deps.AdvanceDeployFix(context.Background(), "SC-1", DeployFixReport{Unconfirmed: true})
+	require.NoError(t, err)
+
+	assert.Zero(t, l.calls)
+	_, failed := posted(c, DeployFailedHeader)
+	assert.True(t, failed)
+}
+
+// A dead fixer dispatched BEFORE the review (the pre-review base merge's own
+// conflict fixer) must carry the before-review field onto its re-dispatch, so
+// its eventual done exit still hands back to the reviewer rather than
+// re-running the deploy (SC-5279).
+func TestAdvanceDeployFix_deadFixerBeforeReviewKeepsTheHandback(t *testing.T) {
+	c := &fakeCommenter{comments: append(deployFixReadyComments(),
+		cmt(markerBody(marker.Marker{
+			Type: MarkerDeployFixStarted,
+			Fields: fields("pr", "https://example/pr/7", "number", "7", "branch", "feat/x",
+				DeployFixBeforeReviewField, deployFixBeforeReviewValue),
+			Body: "branch behind the base with a conflict — resolving it before the review",
+		}, "pr", "number", "branch", DeployFixBeforeReviewField), time.Unix(3, 0)),
+	)}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+
+	err := deps.AdvanceDeployFix(context.Background(), "SC-1", DeployFixReport{Unconfirmed: true})
+	require.NoError(t, err)
+
+	started, ok := posted(c, DeployFixStartedHeader)
+	require.True(t, ok)
+	assert.Contains(t, started, DeployFixBeforeReviewField+": "+deployFixBeforeReviewValue)
 }
 
 func TestDeployFixRounds_CountsMarkers(t *testing.T) {

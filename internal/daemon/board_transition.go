@@ -1771,8 +1771,9 @@ func doneStageBranch(comments []tracker.Comment, card BoardCard) string {
 // the failure watcher calls it with the outcome the step recorded in the state
 // store (reviewVerdict or fixExit); it reads the loop's markers, asks the pure
 // decider for the next action, and executes it: launch the reviewer, launch the
-// fixer, un-draft + merge via the existing DeployBranch, or red the card for a
-// human. Human PR review runs out of band and never enters here.
+// fixer, un-draft + merge via the existing DeployBranch, relaunch a step whose
+// agent died without recording (SC-5554), or red the card for a human. Human PR
+// review runs out of band and never enters here.
 func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, outcome PRLoopOutcome) error {
 	if !beginPRLoopDrive(pmKey) {
 		d.Logger.Info().Str("pm", pmKey).
@@ -1785,11 +1786,13 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, ou
 		return errors.WrapWithDetails(err, "loading comments for PR loop", "pm", pmKey)
 	}
 	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
-	if d.loopStepStillRunning(pmKey, comments, outcome) {
+	running, stepGone := d.loopStepLiveness(pmKey, comments, outcome)
+	if running {
 		d.Logger.Info().Str("pm", pmKey).
 			Msg("board PR loop: re-drive found the current step unrecorded but its agent alive; leaving it to finish")
 		return nil
 	}
+	outcome.StepDead = stepGone
 	number, url, branch := prLoopNumber(comments), prLoopURL(comments), doneStageBranch(comments, card)
 	// FindingRepeated only means something at the review stage: it asks whether
 	// THIS review's finding is the one the fixer was just sent. On a fix-stage
@@ -1826,6 +1829,8 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, ou
 		return d.mergeReviewedBranch(ctx, pmKey, card, comments, number, url, branch, outcome.ReviewHead)
 	case PRActionOutage:
 		return d.prLoopOutage(ctx, pmKey, comments, outcome)
+	case PRActionRelaunch:
+		return d.relaunchDeadLoopStep(ctx, pmKey, comments, outcome, PRResult{Number: number, URL: url}, branch)
 	case PRActionEscalate:
 		return d.escalatePRLoop(ctx, pmKey, comments, outcome)
 	default:
@@ -1890,51 +1895,92 @@ func (d BoardTransitionDeps) prLoopOutage(ctx context.Context, pmKey string, com
 	return d.doneStageOutage(ctx, pmKey, comments, outcome.outageReason(LatestPRLoopStage(comments)))
 }
 
-// loopStepStillRunning is the re-drive's liveness check. Only a drive with no
-// exit event behind it (outcome.Agent empty) asks: the hook path's drive is
-// the step's own ending and needs no probe. A step with no record whose agent
-// is alive is work in progress, not a finished step the loop cannot read.
-//
-// Two questions, because the done stage runs three agents and only two of them
-// are loop steps. The second is the deploy fixer's, and it deliberately sits
-// OUTSIDE loopHalfStillRunning's stepRecorded short-circuit: the merge that
-// dispatched the fixer runs inside the approved review's own drive, so the
-// newest loop marker still names that review and its recorded approval would
-// otherwise send this re-drive straight back to PRActionMerge, against the
-// branch the fixer is mid-rebase on (SC-5591).
-func (d BoardTransitionDeps) loopStepStillRunning(pmKey string, comments []tracker.Comment, outcome PRLoopOutcome) bool {
-	if d.LoopStepAlive == nil || outcome.Agent != "" {
-		return false
-	}
-	if d.loopHalfStillRunning(pmKey, comments, outcome) {
-		return true
-	}
-	return d.LoopStepAlive(agentNameFor(pmKey, deployFixAgentStage))
-}
-
-// loopHalfStillRunning answers the question for the loop's own two steps: the
-// step the fresh thread names has no record of its own and its agent is alive.
-// The caller has already established that d.LoopStepAlive is wired and that this
-// drive carries no exit event.
-func (d BoardTransitionDeps) loopHalfStillRunning(pmKey string, comments []tracker.Comment, outcome PRLoopOutcome) bool {
-	stage := LatestPRLoopStage(comments)
-	// A record from a PRIOR round still satisfies stepRecorded — those keys are
-	// never cleared between rounds — so a recorded-but-stale outcome must be
-	// treated as unrecorded here too, or every round after the first skips the
-	// alive check and escalates over a live fixer/reviewer (SC-5120).
-	if outcome.stepRecorded(stage) && !outcome.stepStale(stage) {
-		return false
-	}
-	var agentStage BoardStage
+// loopAgentStage names the agent that runs a loop step, and reports whether the
+// stage is one of the loop's own two at all.
+func loopAgentStage(stage PRLoopStage) (BoardStage, bool) {
 	switch stage {
 	case PRStageReview:
-		agentStage = prReviewAgentStage
+		return prReviewAgentStage, true
 	case PRStageFix:
-		agentStage = prFixAgentStage
+		return prFixAgentStage, true
 	default:
-		return false
+		return "", false
 	}
-	return d.LoopStepAlive(agentNameFor(pmKey, agentStage))
+}
+
+// loopStepLiveness is the re-drive's liveness check and, in the same answer, the
+// fact the relaunch turns on: is the outcome the loop is missing still coming, or
+// never coming?
+//
+//   - running: a step with no record of its own whose agent is alive is work in
+//     progress, not a finished step the loop cannot read (SC-5120). The question
+//     is asked of board-<key>-deployfix too, and deliberately OUTSIDE the
+//     recorded-outcome short-circuit: the merge that dispatched the fixer runs
+//     inside the approved review's own drive, so the newest loop marker still
+//     names that review and its recorded approval would otherwise send this
+//     re-drive straight back to PRActionMerge, against the branch the fixer is
+//     mid-rebase on (SC-5591).
+//   - stepGone: the missing write is never coming, so the round may be re-run
+//     rather than escalated (SC-5554). Only a MISSING record asks: a fresh record
+//     needs no death to explain it.
+//
+// Only a drive with no exit event behind it (outcome.Agent empty) probes at all.
+// The hook path's drive IS the step's own ending: there is nothing to ask, and a
+// record missing there is a write that will never arrive. A host with no probe
+// wired, or a listing that failed (LoopStepAlive reports alive on error, see its
+// wiring in cmd/cmddaemon), claims no death — silence is never read as a corpse.
+func (d BoardTransitionDeps) loopStepLiveness(pmKey string, comments []tracker.Comment, outcome PRLoopOutcome) (running, stepGone bool) {
+	stage := LatestPRLoopStage(comments)
+	agentStage, isLoopStep := loopAgentStage(stage)
+	missing := isLoopStep && outcome.stepMissing(stage)
+	if outcome.Agent != "" {
+		return false, missing
+	}
+	if d.LoopStepAlive == nil {
+		return false, false
+	}
+	if missing && d.LoopStepAlive(agentNameFor(pmKey, agentStage)) {
+		return true, false
+	}
+	if d.LoopStepAlive(agentNameFor(pmKey, deployFixAgentStage)) {
+		return true, false
+	}
+	return false, missing
+}
+
+// relaunchDeadLoopStep re-runs the step whose agent died without recording this
+// round's outcome. Same launch paths as an ordinary round, so every guard holds
+// unchanged: launchPRReview merges an advanced base in first (and hands a
+// conflict to the deploy fixer), and launchPRLoopAgent posts the started marker
+// ONLY if an agent actually started — so a container still winding down refuses
+// the launch, charges no round and leaves the running step to finish (SC-4244).
+// The fresh started marker is what charges the round and moves the freshness
+// anchor the next read settles against.
+func (d BoardTransitionDeps) relaunchDeadLoopStep(ctx context.Context, pmKey string,
+	comments []tracker.Comment, outcome PRLoopOutcome, res PRResult, branch string) error {
+	stage := LatestPRLoopStage(comments)
+	d.Logger.Warn().Str("pm", pmKey).Str("step", loopStepName(stage)).
+		Int("round", chargedStepRounds(comments, stage)).
+		Msg("board PR loop: the step's agent died without recording an outcome; re-running the round")
+	if stage == PRStageFix {
+		_, err := d.launchPRLoopAgent(ctx, pmKey, prFixAgentStage,
+			prFixDispatch(pmKey, res.Number, branch), prFixStartedBody(outcome.ReviewFinding, outcome.ReviewClass))
+		return err
+	}
+	_, err := d.launchPRReview(ctx, pmKey, res, branch)
+	return err
+}
+
+// loopStepName is the step's name for a log line and for the escalation's prose.
+func loopStepName(stage PRLoopStage) string {
+	switch stage {
+	case PRStageReview:
+		return "PR reviewer"
+	case PRStageFix:
+		return "PR fixer"
+	default:
+		return "review→fix loop step"
+	}
 }
 
 // escalatePRLoop routes a non-converging loop to the right surface, and what
@@ -2034,9 +2080,10 @@ func (d BoardTransitionDeps) pursueSoleDirection(ctx context.Context, pmKey stri
 // re-drive, which has no agent in hand — the line at least names what was
 // missing instead of implying something unparseable was found.
 func prEscalationReason(stage PRLoopStage, outcome PRLoopOutcome, diagnose BoardFailureDiagnoser) string {
+	if reason, resolved := unresolvedStepReason(stage, outcome); resolved {
+		return reason
+	}
 	switch {
-	case outcome.stepStale(stage):
-		return staleStepReason(stage)
 	case stage == PRStageFix && outcome.FixExit == PRFixDone && outcome.headStalled():
 		return "the PR fixer recorded done but added no commit — the reviewed head is unchanged, so another review would loop; check the fixer's log and the PR, then re-run Deploy"
 	case outcome.FixExit == string(ExitNeedsInput):
@@ -2066,6 +2113,27 @@ func prEscalationReason(stage PRLoopStage, outcome PRLoopOutcome, diagnose Board
 // step ended without naming what it was stuck on, which is the honest reading:
 // sending a human to "read the review comments and decide" implies a question
 // was recorded there, and none was.
+// unresolvedStepReason answers the three ways the step's OWN record can fail
+// to settle into something actionable — a fresh write that will not decode, a
+// confirmed death with its re-runs spent, or a record merely not confirmed
+// current — before any RECORDED verdict/exit is even considered. Split out of
+// prEscalationReason so the badge's routing stays under the gocyclo bound
+// (SC-5554 added two more of these three-way splits to what was already a long
+// switch); resolved is false when none applies and the caller's ordinary
+// verdict/exit switch decides instead.
+func unresolvedStepReason(stage PRLoopStage, outcome PRLoopOutcome) (reason string, resolved bool) {
+	switch {
+	case outcome.stepUnreadable(stage):
+		return unreadableStepReason(stage), true
+	case outcome.StepDead && outcome.stepMissing(stage):
+		return deadStepReason(stage), true
+	case outcome.stepStale(stage):
+		return staleStepReason(stage), true
+	default:
+		return "", false
+	}
+}
+
 func needsInputReason(outcome PRLoopOutcome) string {
 	if s := strings.TrimSpace(outcome.FixSummary); s != "" {
 		return "the PR fixer stopped for a decision it could not make: " + s + " — decide, then re-run Deploy"
@@ -2073,11 +2141,46 @@ func needsInputReason(outcome PRLoopOutcome) string {
 	return "the PR fixer stopped for a decision but named neither the question nor a way forward — read the PR review comments and the fixer's log, then re-run Deploy"
 }
 
+// unreadableStepReason names a record that IS this round's and would not decode:
+// the step reported, and what it reported cannot be read. Distinct from
+// staleStepReason (a record that could not be confirmed current) and from
+// unrecordedStepReason (no record at all), because the three send a person to
+// three different places (SC-5554).
+func unreadableStepReason(stage PRLoopStage) string {
+	what := "the PR review→fix loop step's outcome"
+	switch stage {
+	case PRStageReview:
+		what = "the review verdict"
+	case PRStageFix:
+		what = "the fixer's exit"
+	}
+	return "the loop found " + what + " for this round but could not read it — check the PR and its review, then re-run Deploy"
+}
+
+// deadStepReason is the escalation for a step that died without recording, after
+// the re-runs are spent. Reached only with the step's round budget exhausted —
+// below it the round is re-run (PRActionRelaunch) — so the line says the step
+// died rather than implying it decided something unreadable, which is what sent
+// a person to read a review that was never written (SC-5554).
+func deadStepReason(stage PRLoopStage) string {
+	report := "an outcome"
+	switch stage {
+	case PRStageReview:
+		report = "a verdict"
+	case PRStageFix:
+		report = "an exit"
+	}
+	return "the " + loopStepName(stage) + " died before recording " + report +
+		" and the loop's re-runs for it are spent — check the PR and its review, then re-run Deploy"
+}
+
 // staleStepReason names the record the loop could not confirm was current
 // (SC-2378): a state-store read that raced ahead of the reviewer's or fixer's
-// final write, and stayed unconfirmed through its bounded settle backoff. The
-// loop escalates rather than risk acting on a superseded verdict or exit —
-// this is the operator-facing explanation of which one it was.
+// final write, and stayed unconfirmed through its bounded settle backoff. It is
+// reached only when the step's agent is NOT confirmed dead — a dead step below
+// its round budget re-runs instead (PRActionRelaunch, SC-5554) — so the loop
+// escalates rather than risk acting on a superseded verdict or exit; this is the
+// operator-facing explanation of which one it was.
 func staleStepReason(stage PRLoopStage) string {
 	what := "the PR review→fix loop step's outcome"
 	switch stage {
@@ -2089,8 +2192,12 @@ func staleStepReason(stage PRLoopStage) string {
 	return "the loop could not confirm " + what + " was fully written before acting on it — check the PR and its review, then re-run Deploy"
 }
 
-// unrecordedStepReason explains a loop step that left no outcome behind. The
-// RETURNED escalation line is always the house-style situation+next-action —
+// unrecordedStepReason explains a loop step that left no outcome behind. It is
+// reached only when the step's agent is NOT confirmed dead — a confirmed-dead
+// step below its round budget re-runs instead (deadStepReason once the budget
+// is spent, SC-5554) — so this message covers the durable reconcile re-drive,
+// which has no agent to ask, and a live host whose probe simply found nothing.
+// The RETURNED escalation line is always the house-style situation+next-action —
 // never a diagnoser's raw post-mortem headline/detail (SC-3024): a diagnosis
 // carries machine vocabulary (container/OOM/exit-code) a card-facing marker
 // must never print as THE message. The diagnosis still reaches the ticket via
@@ -2150,9 +2257,17 @@ func (b Blocker) addTo(m marker.Marker) marker.Marker {
 // read in one place (readDeployFixReport), and the next field the loop needs
 // should not become a fourth positional argument.
 type DeployFixReport struct {
-	// Exit is the class the fixer recorded; "" when it recorded nothing, which
-	// the driver treats like any other non-done ending.
+	// Exit is the class the fixer recorded; "" when nothing usable was found.
 	Exit StageExit
+	// Unconfirmed reports that NO record of this dispatch was found: the fixer
+	// recorded nothing, or what the store holds predates this round's
+	// deploy-fix-started marker. This driver runs only on the fixer's exit, so a
+	// fixer with no record of its own died mid-round — a dead step, not a fixer
+	// that decided something unreadable — and the round is re-run within
+	// DefaultDeployFixRounds rather than redding a deploy nothing judged
+	// (SC-5554). Deliberately NOT set for a record that IS this round's and would
+	// not decode: that fixer reported, and the card reds.
+	Unconfirmed bool
 	// Blocker is what a needs-human-work stop recorded about itself; the loop
 	// carries it onto the marker it posts on the fixer's behalf (SC-5179).
 	Blocker Blocker
@@ -2168,12 +2283,15 @@ type DeployFixReport struct {
 // AdvanceDeployFix is the deploy-fixer's Stop-event driver. On the fixer's exit the
 // failure watcher calls it with the report the agent recorded in stage.deploy-fix. A
 // `done` exit publishes the fixer's local resolution and re-runs the deploy pipeline
-// (the branch is then ready for a fresh CI gate + merge); an `outage` exit is not a
+// (the branch is then ready for a fresh CI gate + merge); a report that confirms
+// nothing about this round (Unconfirmed) re-runs it within DefaultDeployFixRounds
+// rather than redding a deploy nothing judged (SC-5554); an `outage` exit is not a
 // failure at all and parks the card on the done stage's outage marker (SC-5592) —
 // unless this daemon's own proxy refused the host the fixer needed, which is a
-// configuration gap and reds once instead (SC-5840); any other exit reds the card
-// with a terminal deploy-failed. The deployFixRounds budget already bounds how many
-// times the pipeline re-enters here, so a genuinely unfixable failure terminates.
+// configuration gap and reds once instead (SC-5840); any other RECORDED non-done
+// exit reds the card with a terminal deploy-failed. The deployFixRounds budget
+// already bounds how many times the pipeline re-enters here, so a genuinely
+// unfixable failure terminates.
 // The blocker is what a needs-human-work stop recorded about itself; the loop
 // carries it onto the marker it posts on the agent's behalf, so the person on the
 // red card is not sent back to re-run the investigation.
@@ -2240,6 +2358,15 @@ func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string,
 	// back to "waiting" would re-drive the deploy underneath them (SC-5592).
 	if fixExit == ExitOutage {
 		return d.deployFixUnreachable(ctx, pmKey, comments, report.Summary)
+	}
+	// A fixer that died without recording this round's outcome is a dead step. It
+	// sits after the stageAlreadyFailed guard — a done stage another actor already
+	// redded stays theirs (SC-5592) — and after the outage arm, which owns the
+	// only other uncharged ending.
+	if report.Unconfirmed {
+		if handled, err := d.relaunchDeadDeployFixer(ctx, pmKey, comments, branch); handled {
+			return err
+		}
 	}
 	// The fixer's own blocker evidence rides on the marker: the escalation
 	// line says what the fixer was sent to fix, the four fields say what it
@@ -2336,6 +2463,66 @@ func dispatchedFailure(comments []tracker.Comment) string {
 // deployFixStartedType is DeployFixStartedHeader's marker type — the name
 // marker.ParseBody reports, without the human: prefix and brackets.
 const deployFixStartedType = "deploy-fix-started"
+
+// relaunchDeadDeployFixer owns the whole dead-fixer case: re-dispatch the round
+// within the deploy-fix bound, or — with the bound spent — red the card naming a
+// fixer that DIED rather than one that could not recover the deploy, which is
+// what deployFixEscalationReason's stalled line would have said (SC-5554).
+//
+// handled is false only when there is nothing to re-run: no deploy-fix-started
+// marker in the thread at all, so no round ever started and the caller's ordinary
+// red is the right answer. Keeping the decline narrow is what stops an empty
+// report on a thread with no dispatch from launching a fixer against PR 0.
+func (d BoardTransitionDeps) relaunchDeadDeployFixer(ctx context.Context, pmKey string,
+	comments []tracker.Comment, branch string) (handled bool, err error) {
+	if _, dispatched := latestCommentWithHeader(comments, DeployFixStartedHeader); !dispatched {
+		return false, nil
+	}
+	rounds := deployFixRounds(comments)
+	if !deployFixRoundAvailable(comments) || d.Launcher == nil {
+		d.Logger.Warn().Str("pm", pmKey).Int("rounds", rounds).
+			Msg("board deploy fix: the fixer died without recording an outcome and its rounds are spent; redding the card")
+		_, _ = d.Commenter.AddComment(ctx, pmKey, markerBody(failureMarker(MarkerDeployFailed,
+			deadDeployFixerReason(dispatchedFailure(comments), rounds))))
+		return true, nil
+	}
+	d.Logger.Warn().Str("pm", pmKey).Int("rounds", rounds).
+		Msg("board deploy fix: the fixer died without recording an outcome; re-running the round")
+	return true, d.dispatchDeployFixer(ctx, pmKey,
+		PRResult{Number: deployFixLoopNumber(comments), URL: deployFixLoopURL(comments)},
+		branch, deployFixDeadRoundHeadline(dispatchedFailure(comments)), deployFixWasBeforeReview(comments), rounds)
+}
+
+// deployFixDeadRoundHeadline keeps the re-dispatched round pointing at the SAME
+// failure the dead round was sent to fix: dispatchedFailure reads this headline
+// back off the newest deploy-fix-started marker, so overwriting it with "the
+// fixer died" would lose what the escalation must eventually name.
+func deployFixDeadRoundHeadline(dispatched string) string {
+	if dispatched != "" {
+		return dispatched
+	}
+	return "the deploy failure the previous fixer did not record"
+}
+
+// deadDeployFixerReason is the red for a fixer that died without recording, with
+// its rounds spent. It never advises the retry that would hit the same wall
+// alone, the rule deployFixStalledReason holds to (SC-3615).
+func deadDeployFixerReason(dispatched string, rounds int) string {
+	blocking := ""
+	if dispatched != "" {
+		blocking = " The failure it was sent to fix: " + dispatched
+	}
+	return "the deploy fixer died before recording an outcome and its automated rounds are spent — " +
+		"check the fixer's log and the branch, then re-run Deploy." + blocking + deployRoundsSentence(rounds)
+}
+
+// deployFixRoundAvailable is the one rule for "may another fixer round start":
+// the ticket's own budget has room, or a person's Retry deploy re-armed one
+// (SC-5595). Shared by the gate's dispatch and the dead-fixer re-run so the two
+// cannot drift.
+func deployFixRoundAvailable(comments []tracker.Comment) bool {
+	return deployFixRounds(comments) < DefaultDeployFixRounds || deployFixGrants(comments) > 0
+}
 
 // deployFixEscalationReason renders the actionable headline the failed marker shows
 // when the deploy fixer did not converge.
@@ -3206,7 +3393,7 @@ func (d BoardTransitionDeps) deployFailedOrDispatchFixer(ctx context.Context, pm
 			// person re-ran Deploy and re-armed one. Without the second, every
 			// Retry on a spent card found the same conflict, dispatched nobody and
 			// reposted an identical failure (SC-5595).
-			if rounds < DefaultDeployFixRounds || deployFixGrants(comments) > 0 {
+			if deployFixRoundAvailable(comments) {
 				// rounds travels with the dispatch so the two failure arms INSIDE it
 				// — a refused launch gate, a launch that errors — can state what
 				// already ran. They are deploy failures that followed rounds too.

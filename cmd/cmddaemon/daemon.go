@@ -4261,18 +4261,18 @@ func advancePRLoopFunc(ctx context.Context, ds *daemonState, diagnose daemon.Boa
 			fixAnchor, _ = daemon.LatestMarkerTime(comments, daemon.PRFixStartedHeader)
 		}
 
-		verdict, reviewHead, findings, reviewExit, reviewSummary, verdictRecorded, verdictFresh := readPRReviewVerdict(ctx, project, pmKey, reviewAnchor, logger)
-		exit, options, summary, fixHead, exitRecorded, exitFresh := readPRFixReport(ctx, project, pmKey, fixAnchor, logger)
+		verdict, reviewHead, findings, reviewExit, reviewSummary, reviewRead := readPRReviewVerdict(ctx, project, pmKey, reviewAnchor, logger)
+		exit, options, summary, fixHead, fixRead := readPRFixReport(ctx, project, pmKey, fixAnchor, logger)
 		// The record is written from the same reads the loop decides on, so what
 		// it holds is exactly what the loop saw — and only a report confirmed as
 		// this round's, never a previous round's leftover (SC-5278).
-		if verdictRecorded && verdictFresh {
+		if reviewRead.fresh {
 			recordReviewRound(ctx, findingsRecord, project, pmKey, comments, findings, reviewHead, logger)
 		}
 		// See fixDispositionIsFresh: exitFresh alone is not enough on a
 		// review exit, where the newest pr-fix-started marker is the
 		// PREVIOUS round's (SC-5278).
-		if fixDispositionIsFresh(comments, exitRecorded, exitFresh) {
+		if fixDispositionIsFresh(comments, fixRead.recorded, fixRead.fresh) {
 			recordFixDisposition(ctx, findingsRecord, project, pmKey, comments, exit, summary, logger)
 		}
 		parsed := daemon.ParseFindings(findings)
@@ -4281,22 +4281,24 @@ func advancePRLoopFunc(ctx context.Context, ds *daemonState, diagnose daemon.Boa
 			finding, class = parsed[0].Fingerprint(), parsed[0].ClassKey()
 		}
 		return deps.AdvancePRLoop(ctx, pmKey, daemon.PRLoopOutcome{
-			ReviewVerdict:  verdict,
-			ReviewRecorded: verdictRecorded,
-			ReviewHead:     reviewHead,
-			ReviewExit:     reviewExit,
-			ReviewSummary:  reviewSummary,
-			ReviewFinding:  finding,
-			ReviewClass:    class,
-			ReviewStale:    verdictRecorded && !verdictFresh,
-			FixExit:        exit,
-			FixRecorded:    exitRecorded,
-			FixHead:        fixHead,
-			FixStale:       exitRecorded && !exitFresh,
-			FixOptions:     options,
-			FixSummary:     summary,
-			Agent:          agentName,
-			ErrorType:      errorType,
+			ReviewVerdict:    verdict,
+			ReviewRecorded:   reviewRead.recorded,
+			ReviewHead:       reviewHead,
+			ReviewExit:       reviewExit,
+			ReviewSummary:    reviewSummary,
+			ReviewFinding:    finding,
+			ReviewClass:      class,
+			ReviewStale:      reviewRead.stale(),
+			ReviewUnreadable: reviewRead.unreadable,
+			FixExit:          exit,
+			FixRecorded:      fixRead.recorded,
+			FixHead:          fixHead,
+			FixStale:         fixRead.stale(),
+			FixUnreadable:    fixRead.unreadable,
+			FixOptions:       options,
+			FixSummary:       summary,
+			Agent:            agentName,
+			ErrorType:        errorType,
 		})
 	}
 }
