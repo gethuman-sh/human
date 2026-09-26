@@ -23,7 +23,7 @@ future contributions and is recorded in the `cla-signatures` branch.
 
 - Open an issue first for anything non-trivial so the approach can be agreed on.
 - Reference the issue from the PR description (e.g. `Closes #123`).
-- Run `make check` before pushing — it runs tests, lint, and coverage.
+- Run `make check` before pushing — it runs the full test suite (every package, `cmd/` included), the linters, the security scans and the secret scan. The 80% coverage threshold is enforced by CI, not here: it is environment-sensitive locally.
 - Keep PRs focused: one logical change per PR.
 
 ## Development
@@ -32,6 +32,6 @@ future contributions and is recorded in the `cla-signatures` branch.
 make build   # build the human binary, and the linux build agent containers run
 make test    # run tests
 make lint    # run linters
-make check   # everything CI runs
+make check   # everything CI runs, minus the coverage threshold (CI owns that)
 make hooks   # install the commit-msg hook (issue-ref enforcement)
 ```

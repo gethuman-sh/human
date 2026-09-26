@@ -75,16 +75,26 @@ type Deployer interface {
 	// answers about the tip the rebase replaced (SC-5395). The caller waits for
 	// the forge to report this head before reading any verdict from it.
 	EnsureMergeable(ctx context.Context, req PRRequest) (head string, err error)
-	// FreshenBranch brings the LOCAL branch current with the base before a
-	// review round, so the reviewer reads the integrated candidate rather than
-	// the branch as it was pushed: when origin/<base> has advanced past the
-	// branch it merges the base in (a merge, never a rebase — the fixer's
-	// recorded head and the reviewer's head binding stay ancestors) and moves
-	// the local ref. A textual conflict leaves the branch untouched and is
-	// reported as FreshnessConflict for the caller to hand to the deploy fixer
-	// before any reviewer runs (SC-5279). On a clean merge it also runs the
-	// project's fast test tier against the merged result, still in the
-	// ephemeral worktree; a red tier is reported as FreshnessTestsFailed,
+	// FreshenBranch brings the LOCAL branch current with the base OR with
+	// origin before a review round, so the reviewer reads the integrated
+	// candidate rather than the branch as it was pushed. Two things move the
+	// local ref: when origin/<base> has advanced past the branch it merges
+	// the base in (a merge, never a rebase — the fixer's recorded head and
+	// the reviewer's head binding stay ancestors) and moves the local ref;
+	// and, independently of the base merge, when the local ref carries
+	// nothing origin lacks (a repair pushed straight to the forge, or plain
+	// reconciliation) it is instead moved to ORIGIN's tip and reported as
+	// FreshnessCurrent, so a stale local ref is never read over a repair
+	// (SC-5596). A textual conflict on the base merge leaves the branch
+	// untouched and is reported as FreshnessConflict for the caller to hand
+	// to the deploy fixer before any reviewer runs (SC-5279). A local ref
+	// that diverges from origin with each side carrying a change the other
+	// lacks cannot be reconciled mechanically: it is refused with a plain
+	// error naming both heads (reconcileByContent's divergence refusal),
+	// which today's only caller logs and reviews the branch as it stands
+	// rather than routing to the deploy fixer. On a clean base merge it also
+	// runs the project's fast test tier against the merged result, still in
+	// the ephemeral worktree; a red tier is reported as FreshnessTestsFailed,
 	// routed to the deploy fixer exactly like a conflict, so a merge that is
 	// textually clean but does not build is never handed to the reviewer as
 	// the integrated candidate. It never pushes: the daemon publishes the
@@ -112,7 +122,9 @@ type Deployer interface {
 	// origin and would re-run the same conflicting rebase (SC-2845). It reports
 	// whether it published: a local ref that is absent, unchanged, or does not
 	// yet contain the base tip is no resolution, and is left for the deploy's own
-	// freshness rebase to handle.
+	// freshness rebase to handle; a local ref origin has already overtaken (the
+	// reconciliation adopts origin's tip instead of pushing) also reports false,
+	// because nothing of the fixer's was carried (SC-5596).
 	PublishResolvedBranch(ctx context.Context, workspaceDir, branch string) (published bool, err error)
 }
 

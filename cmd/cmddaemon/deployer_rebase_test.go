@@ -518,7 +518,7 @@ func TestEnsureMergeable_realGit_localRefFollowsThePublishedTip(t *testing.T) {
 		t.Errorf("the published rebase must be contained in the freshened branch, not orphaned: %s", out)
 	}
 
-	pushErr := forgeDeployer{}.pushBranch(context.Background(), ws, "autofix/x")
+	_, pushErr := forgeDeployer{}.pushBranch(context.Background(), ws, "autofix/x")
 	if pushErr != nil {
 		t.Fatalf("pushBranch must succeed, got: %v", pushErr)
 	}

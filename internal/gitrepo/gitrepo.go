@@ -457,6 +457,66 @@ var CommitsBetween = func(ctx context.Context, dir, base, to string) ([]Commit, 
 	return commits, nil
 }
 
+// UnpublishedCommits lists the commits reachable from branch whose CHANGE is not
+// present on upstream, compared by patch-id rather than by SHA (running
+// `git -C <dir> cherry -v <upstream> <branch>` and keeping the "+" lines, which
+// are the ones with no equivalent upstream). SHA equality cannot answer this
+// question and answering it wrongly loses work: a rebase or an amend rewrites
+// every SHA while changing nothing, so a stale ref whose work upstream already
+// carries in rebased form looks like unpublished work to a SHA comparison
+// (SC-5596). `git cherry` prints the full SHA, so ShortSHA is the conventional
+// 7-character prefix rather than git's own abbreviation. Package var so callers
+// can stub git access in tests.
+var UnpublishedCommits = func(ctx context.Context, dir, upstream, branch string) ([]Commit, error) {
+	out, err := runner(ctx, "git", "-C", dir, "cherry", "-v", upstream, branch)
+	if err != nil {
+		return nil, errors.WrapWithDetails(err, "comparing branch content against upstream",
+			"dir", dir, "upstream", upstream, "branch", branch)
+	}
+	var commits []Commit
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		rest, only := strings.CutPrefix(line, "+ ")
+		if !only {
+			continue // "- <sha>": an equivalent change is already upstream
+		}
+		sha, subject, _ := strings.Cut(rest, " ")
+		if sha == "" {
+			continue
+		}
+		short := sha
+		if len(short) > 7 {
+			short = short[:7]
+		}
+		commits = append(commits, Commit{SHA: sha, ShortSHA: short, Subject: subject})
+	}
+	return commits, nil
+}
+
+// AppliesCleanly reports whether commit's OWN change — the difference between
+// commit and its first parent, as a cherry-pick would take it — applies onto
+// tip without a content conflict (`git -C <dir> merge-tree --write-tree --quiet
+// --merge-base=<commit>^ <tip> <commit>`); no ref moves and no working tree is
+// touched. A whole-history merge probe cannot isolate one commit: a branch
+// holding a stale conflicting commit with an unrelated commit stacked on top
+// conflicts as a whole, and the unrelated commit's content is invisible to it.
+// Pinning the merge base at the commit's parent is what makes the question
+// about that commit alone (SC-5596). git exits 0 for a clean apply and 1 for a
+// conflicted one; any other exit (a bad ref, a spawn failure) is a real error. Package var so
+// callers can stub git access in tests.
+var AppliesCleanly = func(ctx context.Context, dir, tip, commit string) (bool, error) {
+	_, err := runner(ctx, "git", "-C", dir, "merge-tree", "--write-tree", "--quiet",
+		"--merge-base="+commit+"^", tip, commit)
+	switch {
+	case err == nil:
+		return true, nil
+	case cleanAbsence(err):
+		return false, nil // exit 1: a real content conflict, not an error
+	default:
+		return false, errors.WrapWithDetails(err, "probing whether a commit applies cleanly",
+			"dir", dir, "tip", tip, "commit", commit)
+	}
+}
+
 // CurrentBranch returns the checked-out branch name of the repository at dir
 // (running `git -C <dir> rev-parse --abbrev-ref HEAD`). A detached HEAD yields
 // "HEAD", which callers should treat as "no branch". Package var so callers can

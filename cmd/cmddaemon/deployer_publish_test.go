@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -164,11 +163,11 @@ func TestPublishResolvedBranch_NoLocalBranch(t *testing.T) {
 	}
 }
 
-// The publish goes through pushBranch, so it inherits the
-// never-publish-behind-origin guard: a resolution that is strictly behind newer
-// origin work must be refused, not lease-pushed over it. Without this, carrying
-// the fixer's work would become a new way to lose someone else's.
-func TestPublishResolvedBranch_RefusesBehindOrigin(t *testing.T) {
+// The publish goes through pushBranch, so a resolution that origin has already
+// overtaken is ADOPTED rather than pushed over: the newer origin work still
+// survives (SC-2322), and nothing was carried, which PublishResolvedBranch
+// reports as published=false rather than as an error (SC-5596).
+func TestPublishResolvedBranch_AdoptsNewerOriginInsteadOfPublishing(t *testing.T) {
 	requireGit(t)
 	ws, branch, resolved := resolvedBranchRepo(t)
 	// The resolution lands on origin, then origin gains newer work on top of it
@@ -184,17 +183,17 @@ func TestPublishResolvedBranch_RefusesBehindOrigin(t *testing.T) {
 	runGit(t, ws, "reset", "--hard", resolved)
 
 	published, err := forgeDeployer{}.PublishResolvedBranch(context.Background(), ws, branch)
-	if err == nil {
-		t.Fatal("publishing a resolution behind origin must be refused")
+	if err != nil {
+		t.Fatalf("adopting a resolution origin has overtaken must not error, got: %v", err)
 	}
 	if published {
-		t.Error("a refused publish must not report published=true")
-	}
-	if !strings.Contains(err.Error(), "newer work that must survive") {
-		t.Errorf("the refusal must name the commit it protected, got: %v", err)
+		t.Error("nothing was carried to origin: the resolution was superseded and adopted instead")
 	}
 	runGit(t, ws, "fetch", "origin")
 	if tip := runGit(t, ws, "rev-parse", "origin/"+branch); tip != newTip {
 		t.Errorf("origin/%s = %s, want the preserved newer tip %s", branch, tip, newTip)
+	}
+	if tip := runGit(t, ws, "rev-parse", branch); tip != newTip {
+		t.Errorf("the local ref must adopt origin's newer tip: %s = %s, want %s", branch, tip, newTip)
 	}
 }

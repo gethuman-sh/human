@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"fmt"
 	"net"
 	"testing"
 
@@ -18,6 +19,21 @@ func listenAt(t *testing.T) string {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ln.Close() })
 	return ln.Addr().String()
+}
+
+// skipIfDockerHostReachable guards every "no daemon reachable" test the same
+// way TestResolveInfo_DockerFallbackCarriesAllThreeAddresses already guards
+// its own opposite case: inside a real board dispatch container,
+// host.docker.internal:DefaultPort IS a live daemon (the one running this
+// test), so resolveInfo's fallback probe genuinely succeeds there. Without
+// this skip these tests assert the unreachable path from an environment where
+// it does not hold.
+func skipIfDockerHostReachable(t *testing.T) {
+	t.Helper()
+	fallback := DaemonInfo{Addr: fmt.Sprintf("%s:%d", DockerHost, DefaultPort)}
+	if fallback.IsReachable() {
+		t.Skip("a daemon is actually reachable at the Docker-host fallback address in this environment")
+	}
 }
 
 func TestNewClient_CarriesEndpointAndVersion(t *testing.T) {
@@ -74,6 +90,7 @@ func TestNewClientUnchecked_AcceptsTooOldDaemon(t *testing.T) {
 
 func TestConnectUnchecked_ReportsUnreachableLikeConnect(t *testing.T) {
 	withMemFs(t)
+	skipIfDockerHostReachable(t)
 	t.Setenv("HUMAN_DAEMON_ADDR", "")
 	t.Setenv("HUMAN_DAEMON_TOKEN", "")
 
@@ -84,6 +101,7 @@ func TestConnectUnchecked_ReportsUnreachableLikeConnect(t *testing.T) {
 
 func TestIsProtocolError_DistinguishesUnreachable(t *testing.T) {
 	withMemFs(t)
+	skipIfDockerHostReachable(t)
 	t.Setenv("HUMAN_DAEMON_ADDR", "")
 	t.Setenv("HUMAN_DAEMON_TOKEN", "")
 
@@ -158,6 +176,7 @@ func TestResolveInfo_DockerFallbackCarriesAllThreeAddresses(t *testing.T) {
 
 func TestResolveInfo_NoDaemonReports(t *testing.T) {
 	withMemFs(t)
+	skipIfDockerHostReachable(t)
 	t.Setenv("HUMAN_DAEMON_ADDR", "")
 	t.Setenv("HUMAN_DAEMON_TOKEN", "")
 
