@@ -935,6 +935,10 @@ func TestIsLocalSubcommand(t *testing.T) {
 		// bug/security create call the daemon route directly and must run locally.
 		{[]string{"bug", "create", "x"}, true},
 		{[]string{"security", "create", "x"}, true},
+		// feedback's RunE calls the daemon's "feedback" route itself with a
+		// marshaled JSON request; a raw argv forward would collide with that
+		// same route name and be rejected as the wrong shape (SC-6016).
+		{[]string{"feedback", "SC-1", "planning"}, true},
 		// The findings record lives in the daemon host's database, like the
 		// search index and unlike the index writer — so it forwards.
 		{[]string{"review", "findings", "a.go"}, false},

@@ -30,6 +30,7 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmddaemon"
 	"github.com/gethuman-sh/human/cmd/cmddeploy"
 	"github.com/gethuman-sh/human/cmd/cmddoctor"
+	"github.com/gethuman-sh/human/cmd/cmdfeedback"
 	"github.com/gethuman-sh/human/cmd/cmdfigma"
 	"github.com/gethuman-sh/human/cmd/cmdforge"
 	"github.com/gethuman-sh/human/cmd/cmdforward"
@@ -421,6 +422,14 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	fsmCmd.GroupID = "utility"
 	rootCmd.AddCommand(fsmCmd)
 
+	// Runs locally (listed in localSubcommands) and makes its own explicit
+	// RPC call (daemon.Client.Feedback) rather than being forwarded: a raw
+	// argv forward would collide with the daemon's "feedback" route, which
+	// expects a single JSON arg, not KEY/STAGE positionals.
+	feedbackCmd := cmdfeedback.BuildFeedbackCmd()
+	feedbackCmd.GroupID = "utility"
+	rootCmd.AddCommand(feedbackCmd)
+
 	agentContextCmd := cmdagentcontext.BuildAgentContextCmd()
 	agentContextCmd.GroupID = "utility"
 	rootCmd.AddCommand(agentContextCmd)
@@ -730,6 +739,11 @@ var localSubcommands = map[string]bool{
 	// the RunE would open a reentrant connection back into the daemon.
 	"bug":      true,
 	"security": true,
+	// feedback's own RunE calls the daemon's "feedback" route directly with a
+	// single marshaled JSON request (daemon.Client.Feedback); forwarding the
+	// raw KEY/STAGE argv would hit that same route name and be rejected as
+	// the wrong shape (SC-6016).
+	"feedback": true,
 }
 
 // globalValueFlags lists global persistent flags that take a value. When these

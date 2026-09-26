@@ -17,6 +17,7 @@ import (
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/recall"
 	"github.com/gethuman-sh/human/internal/tracker"
+	"github.com/gethuman-sh/human/internal/vault"
 )
 
 // feedbackModel is the model the launch briefing is distilled by. A constant,
@@ -53,10 +54,21 @@ func newLaunchAdvice(record *recall.SQLiteStore, refusals *claudeAuthRefusals, l
 // feedbackFor builds the per-request FeedbackDeps for one project entry and
 // returns its Advice, or nil when the briefing is disabled.
 func (a *launchAdvice) feedbackFor(entry daemon.ProjectEntry, project string, ticket tracker.Getter, comments tracker.Commenter) func(context.Context, string, daemon.BoardStage, string) string {
+	deps := a.depsFor(entry, project, ticket, comments)
+	if deps == nil {
+		return nil
+	}
+	return deps.Advice
+}
+
+// depsFor is the one constructor behind both the launch path (feedbackFor)
+// and the feedback route (explainerFor), so `human feedback` answers from
+// the same record, runner and per-project cache a launch reads.
+func (a *launchAdvice) depsFor(entry daemon.ProjectEntry, project string, ticket tracker.Getter, comments tracker.Commenter) *daemon.FeedbackDeps {
 	if a == nil {
 		return nil
 	}
-	deps := &daemon.FeedbackDeps{
+	return &daemon.FeedbackDeps{
 		Record:    a.record,
 		Runner:    hostFeedbackRunner{dir: entry.Dir, refusals: a.refusals, storeStamp: a.storeStamp},
 		Project:   project,
@@ -67,7 +79,38 @@ func (a *launchAdvice) feedbackFor(entry daemon.ProjectEntry, project string, ti
 		Timeout:   daemon.FeedbackTimeout,
 		Logger:    a.logger,
 	}
-	return deps.Advice
+}
+
+// explainerFor answers the feedback route (SC-6016): the project is resolved
+// from the ticket key the way every board launch resolves it, the tracker
+// clients by PM role, and the briefing is built by the same deps a launch
+// builds it with. nil when the briefing is disabled, which the route reports
+// as such.
+func (a *launchAdvice) explainerFor(reg *daemon.ProjectRegistry, resolver *vault.Resolver) daemon.FeedbackExplainer {
+	if a == nil {
+		return nil
+	}
+	return func(req daemon.FeedbackRequest) (daemon.FeedbackReport, error) {
+		entry, err := reg.EntryForKey(req.Key)
+		if err != nil {
+			return daemon.FeedbackReport{}, err
+		}
+		lookup := entry.EnvLookup()
+		// Scope reads are best-effort on the launch path too: a tracker
+		// without fetch or comment support leaves the scope to the record.
+		getter, err := resolvePMGetter(entry.Dir, lookup, resolver)
+		if err != nil {
+			a.logger.Debug().Err(err).Str("pm", req.Key).Msg("feedback: no PM getter; scope falls back to the record")
+			getter = nil
+		}
+		commenter, err := resolvePMCommenter(entry.Dir, lookup, resolver)
+		if err != nil {
+			a.logger.Debug().Err(err).Str("pm", req.Key).Msg("feedback: no PM commenter; scope falls back to the ticket text")
+			commenter = nil
+		}
+		deps := a.depsFor(entry, boardStateProject(reg, req.Key), getter, commenter)
+		return deps.Explain(context.Background(), req.Key, req.Stage, req.Branch)
+	}
 }
 
 func (a *launchAdvice) cacheFor(dir string) *daemon.FeedbackCache {

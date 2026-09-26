@@ -69,6 +69,13 @@ func TestDecideDispatch_currentDaemonForwardsAsBefore(t *testing.T) {
 	d = decideDispatch([]string{"daemon", "stop"}, ok)
 	assert.False(t, d.forward)
 	assert.NoError(t, d.refuse)
+
+	// `feedback` must never be forwarded as raw argv: the daemon's own
+	// "feedback" route expects a single marshaled JSON request, and a
+	// forwarded KEY/STAGE argv is rejected as the wrong shape (SC-6016).
+	d = decideDispatch([]string{"feedback", "SC-1", "planning"}, ok)
+	assert.False(t, d.forward)
+	assert.NoError(t, d.refuse)
 }
 
 // Daemons predating protocol advertising are accepted by every client; refusing

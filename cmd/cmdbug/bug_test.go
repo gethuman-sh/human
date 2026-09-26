@@ -54,6 +54,11 @@ func startTestDaemon(t *testing.T, token string,
 // in during the test.
 func pointEnvAtDaemon(t *testing.T, addr, token string) {
 	t.Helper()
+	// An explicit address still merges the rest of ~/.human/daemon.json, so
+	// with a real daemon on the host the protocol gate judged the test daemon
+	// by the host daemon's advertised protocol; a fresh HOME keeps the test
+	// talking only to the daemon it started.
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("HUMAN_DAEMON_ADDR", addr)
 	t.Setenv("HUMAN_DAEMON_TOKEN", token)
 }

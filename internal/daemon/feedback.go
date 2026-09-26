@@ -10,6 +10,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/recall"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
@@ -113,10 +114,18 @@ type FeedbackCache struct {
 	blocks map[feedbackKey]string
 }
 
+// feedbackKey identifies one launch's cached block. branch is part of the
+// identity, not an afterthought: the pull-request stages scope by the
+// branch's diff (feedback_scope.go's branchFiles), so a block built for one
+// branch is not the block a launch on a different branch — or no branch at
+// all — would be given. Without it, `human feedback` asked with a differing
+// or absent --branch would write into the exact cache slot the next real
+// launch reads and serve it a briefing scoped to the wrong diff (SC-6016).
 type feedbackKey struct {
 	project string
 	key     string
 	stage   BoardStage
+	branch  string
 	id      int64
 }
 
@@ -137,7 +146,7 @@ func (f *FeedbackDeps) Advice(ctx context.Context, key string, stage BoardStage,
 	if latest == 0 {
 		return ""
 	}
-	ck := feedbackKey{project: f.Project, key: key, stage: stage, id: latest}
+	ck := feedbackKey{project: f.Project, key: key, stage: stage, branch: branch, id: latest}
 	if block, ok := f.Cache.get(ck); ok {
 		return block
 	}
@@ -176,30 +185,99 @@ func (c *FeedbackCache) put(k feedbackKey, block string) {
 // scope's ticket, comment and git-fetch reads on the caller's own context —
 // context.Background() from ApplyTransition — unbounded (SC-5959).
 func (f *FeedbackDeps) build(ctx context.Context, key string, stage BoardStage, branch string) string {
-	timeout := f.Timeout
-	if timeout <= 0 {
-		timeout = FeedbackTimeout
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := f.bounded(ctx)
 	defer cancel()
 
-	scope := f.scope(ctx, key, stage, branch)
-	rows, counts, err := f.gather(ctx, scope.files)
+	rep, err := f.compose(ctx, key, stage, branch)
 	if err != nil {
 		f.Logger.Warn().Err(err).Str("pm", key).Msg("launch advice: record unreadable; launching without it")
 		return ""
 	}
-	if len(rows) == 0 {
+	if rep.Rows == 0 {
 		return ""
 	}
-	prompt := feedbackPrompt(key, scope.title, stage, scope.files, rows, counts)
-	answer, err := f.Runner.Run(ctx, prompt)
+	block, err := f.distill(ctx, rep.Prompt)
 	if err != nil {
 		f.Logger.Warn().Err(err).Str("pm", key).Str("stage", string(stage)).
 			Msg("launch advice: model call failed; launching without it")
 		return ""
 	}
-	return cleanFeedback(answer)
+	return block
+}
+
+// Explain answers `human feedback <KEY> <STAGE>` (SC-6016): the block the
+// daemon would append when launching that stage now, with the scope and the
+// prompt it was distilled from. It shares build's scope, gather and prompt so
+// the command shows exactly what a launch sees, and it reads the same cache,
+// so asking after a launch costs no second model call. Unlike Advice it
+// returns its errors: a person asking wants "the record is unreadable", not a
+// silent empty answer.
+func (f *FeedbackDeps) Explain(ctx context.Context, key string, stage BoardStage, branch string) (FeedbackReport, error) {
+	if f == nil || f.Record == nil || f.Runner == nil {
+		return FeedbackReport{}, errors.WithDetails("the launch briefing is disabled on this daemon: no review record or no model runner", "pm", key)
+	}
+	ctx, cancel := f.bounded(ctx)
+	defer cancel()
+
+	latest, err := f.Record.LatestFindingID(ctx, f.Project)
+	if err != nil {
+		return FeedbackReport{}, errors.WrapWithDetails(err, "reading the review record", "pm", key)
+	}
+	rep, err := f.compose(ctx, key, stage, branch)
+	if err != nil {
+		return FeedbackReport{}, err
+	}
+	if rep.Rows == 0 {
+		return rep, nil
+	}
+	ck := feedbackKey{project: f.Project, key: key, stage: stage, branch: branch, id: latest}
+	if block, ok := f.Cache.get(ck); ok {
+		rep.Block, rep.Cached = block, true
+		return rep, nil
+	}
+	block, err := f.distill(ctx, rep.Prompt)
+	if err != nil {
+		return rep, err
+	}
+	f.Cache.put(ck, block)
+	rep.Block = block
+	return rep, nil
+}
+
+// bounded puts one launch's whole read-and-distill under the deps' timeout.
+func (f *FeedbackDeps) bounded(ctx context.Context) (context.Context, context.CancelFunc) {
+	timeout := f.Timeout
+	if timeout <= 0 {
+		timeout = FeedbackTimeout
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+// compose does everything before the model: the stage's scope, the record
+// rows and counts, and the prompt those become. Rows is 0 when the record
+// has nothing, and then Prompt is empty too — there is nothing to ask.
+func (f *FeedbackDeps) compose(ctx context.Context, key string, stage BoardStage, branch string) (FeedbackReport, error) {
+	scope := f.scope(ctx, key, stage, branch)
+	rep := FeedbackReport{Key: key, Stage: stage, Branch: branch, Title: scope.title, Files: scope.files}
+	rows, counts, err := f.gather(ctx, scope.files)
+	if err != nil {
+		return FeedbackReport{}, errors.WrapWithDetails(err, "reading the review record", "pm", key)
+	}
+	rep.Rows = len(rows)
+	if len(rows) == 0 {
+		return rep, nil
+	}
+	rep.Prompt = feedbackPrompt(key, scope.title, stage, scope.files, rows, counts)
+	return rep, nil
+}
+
+// distill is the one model call, cleaned; "" when the model answered NONE.
+func (f *FeedbackDeps) distill(ctx context.Context, prompt string) (string, error) {
+	answer, err := f.Runner.Run(ctx, prompt)
+	if err != nil {
+		return "", errors.WrapWithDetails(err, "distilling the briefing")
+	}
+	return cleanFeedback(answer), nil
 }
 
 // gather reads the file-scoped rows first and fills the remainder of the row

@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	herrors "github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/recall"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
@@ -339,4 +340,89 @@ func TestDispatchBranch(t *testing.T) {
 	assert.Equal(t, "feat/x", dispatchBranch("/human-pr-review SC-1 --pr=3 --branch=feat/x\n\nmore"))
 	assert.Equal(t, "", dispatchBranch("/human-execute SC-1"))
 	assert.Equal(t, "", dispatchBranch("/human-execute SC-1\n--branch=not-on-the-dispatch-line"))
+}
+
+// `human feedback` must show what a launch sees: the same scope, the same
+// prompt, and the block the launch cache already holds rather than a second
+// model call's differing copy.
+func TestFeedbackExplain_mirrorsTheLaunchAndReadsItsCache(t *testing.T) {
+	store := newFeedbackStore(t)
+	seedFinding(t, store, "p", "SC-9", "internal/x/y.go", "contract", "the wire field was added without a bump")
+	runner := &countingRunner{answer: "- internal/x/y.go [contract]: bump the protocol"}
+	f := &FeedbackDeps{
+		Record: store, Runner: runner, Project: "p", Cache: &FeedbackCache{},
+		Ticket: &fakeGetter{issue: &tracker.Issue{Key: "SC-1", Title: "Add a field", Description: "touches internal/x/y.go"}},
+	}
+
+	launched := f.Advice(context.Background(), "SC-1", BoardPlanning, "")
+	rep, err := f.Explain(context.Background(), "SC-1", BoardPlanning, "")
+
+	require.NoError(t, err)
+	assert.Equal(t, launched, rep.Block)
+	assert.True(t, rep.Cached, "the launch built it; asking costs no second call")
+	assert.Len(t, runner.prompts, 1)
+	assert.Equal(t, "Add a field", rep.Title)
+	assert.Equal(t, 1, rep.Rows)
+	assert.Equal(t, runner.prompts[0], rep.Prompt, "the prompt shown is the prompt the model saw")
+	assert.Equal(t, BoardPlanning, rep.Stage)
+
+	fresh, err := f.Explain(context.Background(), "SC-1", BoardImplementation, "")
+	require.NoError(t, err)
+	assert.False(t, fresh.Cached, "a stage no launch built yet is distilled now")
+	assert.Len(t, runner.prompts, 2)
+	assert.Equal(t, rep.Block, fresh.Block)
+}
+
+// A read-only ask must never decide what a later launch is told. An ask
+// with a differing (or absent) branch writes into its own cache slot, so the
+// launch that follows — which always passes the branch off its own dispatch
+// line — still makes its own call rather than being served the ask's block
+// (SC-6016).
+func TestFeedbackExplain_withDifferingBranchLeavesTheLaunchsOwnCallIntact(t *testing.T) {
+	store := newFeedbackStore(t)
+	seedFinding(t, store, "p", "SC-9", "internal/x/y.go", "contract", "the wire field was added without a bump")
+	runner := &countingRunner{answer: "- internal/x/y.go [contract]: bump the protocol"}
+	f := &FeedbackDeps{Record: store, Runner: runner, Project: "p", Cache: &FeedbackCache{}}
+
+	// A person asking `human feedback SC-1 prfix` without --branch.
+	_, err := f.Explain(context.Background(), "SC-1", prFixAgentStage, "")
+	require.NoError(t, err)
+	assert.Len(t, runner.prompts, 1)
+
+	// The real launch, which always carries the branch off the dispatch
+	// line, must still pay for its own model call.
+	launched := f.Advice(context.Background(), "SC-1", prFixAgentStage, "autofix/sc-1")
+	assert.Len(t, runner.prompts, 2, "the branch-less ask must not have poisoned the launch's cache slot")
+	assert.Equal(t, runner.answer, launched)
+}
+
+func TestFeedbackExplain_emptyRecordIsAnAnswerAndDisabledIsAnError(t *testing.T) {
+	runner := &countingRunner{answer: "- something"}
+	f := &FeedbackDeps{Record: newFeedbackStore(t), Runner: runner, Project: "p"}
+
+	rep, err := f.Explain(context.Background(), "SC-1", BoardPlanning, "")
+
+	require.NoError(t, err)
+	assert.Empty(t, rep.Block)
+	assert.Zero(t, rep.Rows)
+	assert.Empty(t, rep.Prompt, "nothing to ask, nothing shown")
+	assert.Empty(t, runner.prompts)
+
+	var none *FeedbackDeps
+	_, err = none.Explain(context.Background(), "SC-1", BoardPlanning, "")
+	require.Error(t, err, "a person asking is told the briefing is off, not shown nothing")
+}
+
+// Advice swallows a failed model call because a launch must not wait on its
+// preamble; Explain reports it, because the asker wants to know.
+func TestFeedbackExplain_reportsAFailedModelCall(t *testing.T) {
+	store := newFeedbackStore(t)
+	seedFinding(t, store, "p", "SC-9", "a.go", "tests", "no test")
+	f := &FeedbackDeps{Record: store, Runner: &countingRunner{err: errors.New("model unreachable")}, Project: "p"}
+
+	rep, err := f.Explain(context.Background(), "SC-1", BoardPlanning, "")
+
+	require.Error(t, err)
+	assert.Equal(t, 1, rep.Rows, "what was gathered is still reported alongside the error")
+	assert.Contains(t, herrors.CauseChain(err), "model unreachable")
 }
