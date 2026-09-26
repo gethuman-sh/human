@@ -1267,7 +1267,7 @@ func TestProjectConfigStep_AbsoluteConfigdir(t *testing.T) {
 }
 
 func TestGenerateProxyYAML(t *testing.T) {
-	yaml := generateProxyYAML(false)
+	yaml := generateProxyYAML(false, nil)
 	assert.Contains(t, yaml, "proxy:")
 	assert.Contains(t, yaml, "mode: allowlist")
 	assert.Contains(t, yaml, "*.github.com")
@@ -1276,7 +1276,7 @@ func TestGenerateProxyYAML(t *testing.T) {
 }
 
 func TestGenerateProxyYAML_WithIntercept(t *testing.T) {
-	yaml := generateProxyYAML(true)
+	yaml := generateProxyYAML(true, nil)
 	assert.Contains(t, yaml, "intercept:")
 	assert.Contains(t, yaml, "api.anthropic.com")
 }
@@ -1310,11 +1310,84 @@ func TestDefaultProxyDomains_EveryWildcardHasItsApex(t *testing.T) {
 	}
 }
 
+// stacksByFeature picks named stacks out of the shipped registry, so a test
+// asserting on a stack cannot pass against a registry that no longer has it.
+func stacksByFeature(t *testing.T, keys ...string) []StackType {
+	t.Helper()
+	byKey := make(map[string]StackType)
+	for _, s := range StackRegistry() {
+		byKey[s.FeatureKey] = s
+	}
+	out := make([]StackType, 0, len(keys))
+	for _, k := range keys {
+		s, ok := byKey[k]
+		require.Truef(t, ok, "StackRegistry has no stack %q", k)
+		out = append(out, s)
+	}
+	return out
+}
+
+// proxyDomainsIn extracts the proxy.domains entries from a written
+// .humanconfig.yaml. Read back from the FILE rather than from the Go slice:
+// what reaches the daemon's policy is the file, and that is what was wrong.
+func proxyDomainsIn(t *testing.T, content string) []string {
+	t.Helper()
+	var domains []string
+	inDomains := false
+	for _, line := range strings.Split(content, "\n") {
+		if strings.HasPrefix(line, "  domains:") {
+			inDomains = true
+			continue
+		}
+		if !inDomains {
+			continue
+		}
+		entry, ok := strings.CutPrefix(line, "    - ")
+		if !ok {
+			break
+		}
+		domains = append(domains, strings.Trim(strings.TrimSpace(entry), `"`))
+	}
+	require.NotEmpty(t, domains, "no proxy.domains entries in the written config")
+	return domains
+}
+
+// TestProjectConfigStep_AllowlistCoversTheBootstrapItWrites is SC-5879's red.
+// The wizard writes a container bootstrap that fetches from the Go module proxy
+// and the npm registry, and an allowlist that blocks both — so the container it
+// generates cannot run its own bootstrap, and Go's automatic toolchain switch
+// (the recovery for an image whose Go is older than go.mod) cannot download or
+// verify anything. Every `go` invocation then fails at toolchain selection and
+// `make check` inside the container is not the gate it appears to be.
+func TestProjectConfigStep_AllowlistCoversTheBootstrapItWrites(t *testing.T) {
+	fw := newMockFileWriter()
+	state := &WizardState{
+		ProxyEnabled: true,
+		SelectedStacks: stacksByFeature(t,
+			"ghcr.io/devcontainers/features/node:1",
+			"ghcr.io/devcontainers/features/go:1"),
+	}
+	var buf bytes.Buffer
+
+	_, err := NewProjectConfigStep(state).Run(&buf, fw)
+	require.NoError(t, err)
+
+	p, err := proxy.NewPolicy(proxy.ModeAllow, proxyDomainsIn(t, string(fw.files[".humanconfig.yaml"])))
+	require.NoError(t, err)
+	for host, why := range map[string]string{
+		"proxy.golang.org":   "Go's toolchain switch and `go install …@latest` download through it",
+		"sum.golang.org":     "the toolchain and module downloads are verified against it",
+		"registry.npmjs.org": "the generated `npm install -g …` bootstrap fetches from it",
+	} {
+		assert.Truef(t, p.Allowed(host), "the written allowlist blocks %s — %s", host, why)
+	}
+}
+
 // TestGenerateProxyYAML_ListsGitHubApexEntry checks the apex reaches the
 // written .humanconfig.yaml as its own entry: asserting on the substring
 // "github.com" alone would pass on "*.github.com".
 func TestGenerateProxyYAML_ListsGitHubApexEntry(t *testing.T) {
-	yaml := generateProxyYAML(false)
+	yaml := generateProxyYAML(false, nil)
 	assert.Contains(t, yaml, "\n    - \"github.com\"")
 }
 

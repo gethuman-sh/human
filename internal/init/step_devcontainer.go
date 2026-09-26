@@ -13,6 +13,7 @@ import (
 	"github.com/gethuman-sh/human/internal/claude"
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/devcontainer"
+	"github.com/gethuman-sh/human/internal/gotoolchain"
 )
 
 // DevcontainerPrompter abstracts TUI interactions for the devcontainer step.
@@ -91,7 +92,7 @@ func (s *devcontainerStep) Run(w io.Writer, fw claude.FileWriter) ([]string, err
 		caPresent = devcontainer.IsValidCACertFile(filepath.Join(home, ".human", "ca.crt"))
 	}
 
-	cfg := buildDevcontainerConfig(proxy, intercept, stacks, caPresent)
+	cfg := buildDevcontainerConfig(proxy, intercept, stacks, caPresent, goModRequirement(fw))
 
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -188,7 +189,19 @@ func proxyAddrPrelude() string {
 		daemon.DockerHost, daemon.DefaultProxyPort)
 }
 
-func buildDevcontainerConfig(proxy, intercept bool, stacks []StackType, caPresent bool) devcontainerConfig {
+// goModRequirement is the Go version this project's go.mod demands, "" when it
+// is not a Go project. The feature pin is written FROM it so the image cannot
+// ship a Go the project already refuses — the relationship CI expresses as
+// `go-version-file: go.mod` and the feature has no option for (SC-5879).
+func goModRequirement(fw claude.FileWriter) string {
+	data, err := fw.ReadFile("go.mod")
+	if err != nil {
+		return ""
+	}
+	return gotoolchain.GoDirective(data)
+}
+
+func buildDevcontainerConfig(proxy, intercept bool, stacks []StackType, caPresent bool, goVersion string) devcontainerConfig {
 	featureOpts := map[string]any{}
 	if proxy {
 		featureOpts["proxy"] = true
@@ -203,7 +216,14 @@ func buildDevcontainerConfig(proxy, intercept bool, stacks []StackType, caPresen
 		if stack.Fixed {
 			continue // already added with pinned options above
 		}
-		features[stack.FeatureKey] = map[string]any{}
+		opts := map[string]any{}
+		// An unpinned go feature floats free of go.mod; pinning it to go.mod's
+		// own requirement is what keeps a bumped go.mod from outrunning the
+		// image (SC-5879). Left unpinned when there is no go.mod to read.
+		if stack.FeatureKey == goFeatureKey && goVersion != "" {
+			opts["version"] = goVersion
+		}
+		features[stack.FeatureKey] = opts
 	}
 
 	cfg := devcontainerConfig{
@@ -222,9 +242,22 @@ func buildDevcontainerConfig(proxy, intercept bool, stacks []StackType, caPresen
 		},
 	}
 
+	cfg.CapAdd, cfg.Mounts, cfg.PostStartCommand = bootstrapFor(proxy, intercept, caPresent, stacks, cfg.RemoteEnv)
+	return cfg
+}
+
+// bootstrapFor assembles the container's postStartCommand chain, plus the
+// capabilities and mounts that only the intercepting variant needs.
+//
+// The toolchain check goes LAST, deliberately. Earlier in the chain a Go
+// version mismatch would short-circuit the proxy redirect and CA trust, and the
+// container would then present as a certificate failure at the model API —
+// an infrastructure fault misattributed, which is what SC-4819 fixed. Last, it
+// costs nothing and is the final line of the container's start output.
+func bootstrapFor(proxy, intercept, caPresent bool, stacks []StackType, remoteEnv map[string]string) (capAdd, mounts []string, postStart string) {
 	switch {
 	case proxy && intercept:
-		cfg.CapAdd = []string{"NET_ADMIN"}
+		capAdd = []string{"NET_ADMIN"}
 		if caPresent {
 			// The CA bind-mount and its consumer (NODE_EXTRA_CA_CERTS +
 			// update-ca-certificates) share one condition: the cert only has
@@ -233,40 +266,58 @@ func buildDevcontainerConfig(proxy, intercept bool, stacks []StackType, caPresen
 			// container. caPresent still guards it — emitting the mount for a
 			// missing source makes Docker fabricate an empty directory, and
 			// Node's PEM parse then fails on every run.
-			cfg.Mounts = []string{"source=${localEnv:HOME}/.human/ca.crt,target=/home/vscode/.human/ca.crt,type=bind,readonly"}
-			cfg.RemoteEnv["NODE_EXTRA_CA_CERTS"] = "/home/vscode/.human/ca.crt"
-			cfg.PostStartCommand = proxyAddrPrelude() + "sudo -E human-proxy-setup && sudo cp /home/vscode/.human/ca.crt /usr/local/share/ca-certificates/human-proxy.crt && sudo update-ca-certificates && human install --agent claude && human chrome-bridge"
+			mounts = []string{"source=${localEnv:HOME}/.human/ca.crt,target=/home/vscode/.human/ca.crt,type=bind,readonly"}
+			remoteEnv["NODE_EXTRA_CA_CERTS"] = "/home/vscode/.human/ca.crt"
+			postStart = proxyAddrPrelude() + "sudo -E human-proxy-setup && sudo cp /home/vscode/.human/ca.crt /usr/local/share/ca-certificates/human-proxy.crt && sudo update-ca-certificates && human install --agent claude && human chrome-bridge"
 		} else {
-			cfg.PostStartCommand = proxyAddrPrelude() + "sudo -E human-proxy-setup && human install --agent claude && human chrome-bridge"
+			postStart = proxyAddrPrelude() + "sudo -E human-proxy-setup && human install --agent claude && human chrome-bridge"
 		}
 	case proxy:
-		cfg.CapAdd = []string{"NET_ADMIN"}
-		cfg.PostStartCommand = proxyAddrPrelude() + "sudo -E human-proxy-setup && human install --agent claude && human chrome-bridge"
+		capAdd = []string{"NET_ADMIN"}
+		postStart = proxyAddrPrelude() + "sudo -E human-proxy-setup && human install --agent claude && human chrome-bridge"
 	default:
-		cfg.PostStartCommand = "human install --agent claude && human chrome-bridge"
+		postStart = "human install --agent claude && human chrome-bridge"
 	}
-
-	// Install LSP binaries matching the selected language stacks.
 	if lsp := lspInstallCmd(stacks); lsp != "" {
-		cfg.PostStartCommand += " && " + lsp
+		postStart += " && " + lsp
 	}
+	if hasGoStack(stacks) {
+		postStart += " && " + toolchainCheckCmd
+	}
+	return capAdd, mounts, postStart
+}
 
-	return cfg
+// toolchainCheckCmd names the mismatch at container start instead of letting
+// every go invocation in the run rediscover it (SC-5879).
+const toolchainCheckCmd = "human doctor toolchain"
+
+func hasGoStack(stacks []StackType) bool {
+	for _, s := range stacks {
+		if s.FeatureKey == goFeatureKey {
+			return true
+		}
+	}
+	return false
+}
+
+// stackInstallCmd is the bootstrap command each language stack needs in the
+// container. Package level because the generated ALLOWLIST is derived from the
+// same table (egress_hosts.go): a command whose hosts nobody allowed is a
+// container that cannot run its own bootstrap (SC-5879).
+var stackInstallCmd = map[string]string{
+	goFeatureKey:                              "go install golang.org/x/tools/gopls@latest",
+	"ghcr.io/devcontainers/features/rust:1":   "rustup component add rust-analyzer",
+	"ghcr.io/devcontainers/features/python:1": "npm install -g pyright",
+	"ghcr.io/devcontainers/features/ruby:1":   "gem install solargraph",
+	"ghcr.io/devcontainers/features/php:1":    "npm install -g intelephense",
 }
 
 // lspInstallCmd returns a shell command that installs LSP server binaries
 // for the selected language stacks. Returns "" when no stacks have an LSP.
 func lspInstallCmd(stacks []StackType) string {
-	featureToCmd := map[string]string{
-		"ghcr.io/devcontainers/features/go:1":     "go install golang.org/x/tools/gopls@latest",
-		"ghcr.io/devcontainers/features/rust:1":   "rustup component add rust-analyzer",
-		"ghcr.io/devcontainers/features/python:1": "npm install -g pyright",
-		"ghcr.io/devcontainers/features/ruby:1":   "gem install solargraph",
-		"ghcr.io/devcontainers/features/php:1":    "npm install -g intelephense",
-	}
 	var cmds []string
 	for _, stack := range stacks {
-		if cmd, ok := featureToCmd[stack.FeatureKey]; ok {
+		if cmd, ok := stackInstallCmd[stack.FeatureKey]; ok {
 			cmds = append(cmds, cmd)
 		}
 	}
