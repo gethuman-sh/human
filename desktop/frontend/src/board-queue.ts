@@ -566,8 +566,7 @@ export function badgeInfo(
     return {
       cls: "await",
       text: "deploy queued — waiting for this ticket's container",
-      title:
-        "The deploy was accepted and is waiting for this ticket's own container to release the checkout. " +
+      title: "The deploy was accepted and is waiting for this ticket's own container to release the checkout. " +
         "It starts by itself when that container ends; if it has not within 15 minutes the card comes back here and says so.",
       spinner: false,
     };
