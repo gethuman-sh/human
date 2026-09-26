@@ -105,7 +105,13 @@ func agentNamesForPlacement(card BoardViewCard) []string {
 		// teaching the loop-half derivation the deploy-fix header instead would
 		// silently widen doneStageLoopActive, which gates the PR-loop re-drive
 		// and the stuck-running guard.
-		if card.DeployPhase == "" {
+		//
+		// The two halves BY NAME, not "any phase set": DeployPhase now also names a
+		// deploy accepted and queued behind this ticket's own container, which runs
+		// in the daemon under no agent at all — naming the loop's containers for it
+		// would paint "agent not running" over a deploy that is waiting exactly as
+		// it was told to (SC-5878).
+		if card.DeployPhase != DeployPhasePRReview && card.DeployPhase != DeployPhasePRFix {
 			return nil
 		}
 		return []string{

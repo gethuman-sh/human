@@ -287,7 +287,22 @@
         "skill"
       ],
       "stale_when": "A [human:ready-for-review] handoff, newer than the verdict, naming a commit the verdict did not judge. The verdict judged the round it was posted against and records which commits that was (review-complete's optional commits field), so the question is about the work, not the clock: a rebuild handed back awaits a fresh review, while a handoff re-posted to record the reviewer's own commit is not a new round and stales nothing (SC-5475).",
-      "if_nothing_happens": "A passing verdict waits for the Deploy gesture, and the gesture then waits for the checkout: the done stage does not push, freshen or open a pull request while the implementation container (or the verification container) is still alive on the machine that runs it. It polls every 15s for up to DeployCheckoutWaitBound (15m) and then abandons the launch, recording nothing (deploy-launch-deferred) — an implementation container still alive that long after its verdict is hung, and the stuck-running sweep answers for it rather than the deploy redding the wrong stage (SC-5691). A rework hands off again, and that handoff leaves this state: chainReviewAfterCleanBuild launches the review live, and reconcileOrphanedHandoffs recovers it when the live hook is lost. The daemon also acts here on the legacy PR path."
+      "if_nothing_happens": "A passing verdict waits for the Deploy gesture, and the gesture then waits for the checkout: the done stage does not push, freshen or open a pull request while the implementation container (or the verification container) is still alive on the machine that runs it. It polls every 15s for up to DeployCheckoutWaitBound (15m). From the board the hold is RECORDED and the item moves to deploy-queued the moment it begins (deploy-queued-behind-checkout, SC-5878), and giving up at the bound withdraws that record and brings the item back here saying why (deploy-queue-abandoned); the `human deploy` route still waits silently and answers its caller instead (deploy-launch-deferred). An implementation container still alive that long after its verdict is hung, and the stuck-running sweep answers for it rather than the deploy redding the wrong stage (SC-5691). A rework hands off again, and that handoff leaves this state: chainReviewAfterCleanBuild launches the review live, and reconcileOrphanedHandoffs recovers it when the live hook is lost. The daemon also acts here on the legacy PR path."
+    },
+    {
+      "name": "deploy-queued",
+      "doc": "A deploy the board accepted and is holding: this ticket's own container still holds the checkout the deploy pushes from.",
+      "board": {
+        "stage": "done",
+        "state": "running"
+      },
+      "holds": "The deploy gesture is accepted and RECORDED ([human:deploy-queued], naming the holding agent and the bound), and nothing has been pushed: no branch moved, no pull request opened. No agent runs for this state and no engine run is registered, so the card carries no liveness question (AgentNamesForCard allowlists the two PR-loop halves). The wait lives in the daemon process that accepted the drop. Recording it is the point: the board derives a card from ticket markers alone, so before SC-5878 an accepted deploy held for minutes was indistinguishable from a refused drop — the card read as a finished review and a re-drop queued a second deploy.",
+      "who_may_act": [
+        "daemon",
+        "user"
+      ],
+      "stale_when": "Past DeployCheckoutWaitBound (15 minutes) from the queued record, which is when the waiting run withdraws it itself. A record still standing past DeployCheckoutWaitBound + StuckRunningGrace (30 minutes) is one whose waiting run is gone (stuckGraceFor).",
+      "if_nothing_happens": "The waiting run withdraws its own record at DeployCheckoutWaitBound and the item returns to where the drop found it (deploy-queue-abandoned). If that run never gets the chance — a daemon that stopped mid-wait, a cancelled context — the durable stuck-running pass withdraws it instead, from DeployCheckoutWaitBound + StuckRunningGrace, posting the same record and charging no retry: nothing was pushed and nothing failed, so the done stage is not redded for another stage's container (SC-5691, SC-5878). A second Deploy drop meanwhile starts nothing (deploy-queue-duplicate-drop)."
     },
     {
       "name": "deploying",
@@ -939,7 +954,8 @@
         "stopped",
         "pr-fix",
         "deploy-fixing",
-        "substrate-down"
+        "substrate-down",
+        "deploy-queued"
       ],
       "dst": "deploy-fixing",
       "actor": "daemon",
@@ -995,7 +1011,8 @@
       "src": [
         "ci-gate",
         "deploy-fixing",
-        "deploying"
+        "deploying",
+        "deploy-queued"
       ],
       "dst": "stopped",
       "actor": "daemon",
@@ -1232,13 +1249,79 @@
     {
       "name": "deploy-launch-deferred",
       "src": [
-        "reviewed"
+        "filed",
+        "ticket-reviewed",
+        "planned",
+        "handed-off",
+        "reviewed",
+        "stopped",
+        "substrate-down"
       ],
       "dst": "reviewed",
       "actor": "daemon",
       "moves_item": false,
-      "where": "internal/daemon/board_checkout.go awaitCheckoutFree, called first by internal/daemon/board_transition.go openDraftPRAndReview (the board's Deploy drop, the Deploy retry and the outage re-drive all reach it through runDoneStage) and by internal/daemon/deploy_entry.go StartDeploy (the CLI route)",
-      "doc": "The done stage held back because the implementation container for this key was still alive in the checkout it pushes from. It records NOTHING and moves nothing, like the six launch refusals — but unlike them it WAITS first: no reconcile pass drives a plain reviewed card into the done stage (redeploy-after-outage covers only substrate-down), so a refusal here would strand the gesture with nothing to re-drive it. Past DeployCheckoutWaitBound the launch is abandoned, still without a marker, because a container that has outlived its own verdict by fifteen minutes is hung and belongs to the stuck-running sweep — redding the done stage for it would blame the stage that was waiting. The CLI route refuses the same condition back to its caller instead of abandoning silently (ErrDeployCheckoutBusy, the fourth non-failure deploy refusal), since there a person or an agent is waiting for an answer. A liveness answer that cannot be established — a nil lister, a failed listing — is not 'held': stalling every deploy on a docker hiccup costs more than the window it guards."
+      "where": "internal/daemon/deploy_entry.go StartDeploy → internal/daemon/board_checkout.go awaitCheckoutFree with a nil onQueued",
+      "doc": "The done stage held back because the implementation container for this key was still alive in the checkout it pushes from. It records NOTHING and moves nothing, like the six launch refusals — but unlike them it WAITS first: no reconcile pass drives a plain reviewed card into the done stage (redeploy-after-outage covers only substrate-down), so a refusal here would strand the gesture with nothing to re-drive it. Past DeployCheckoutWaitBound the launch is abandoned, still without a marker, because a container that has outlived its own verdict by fifteen minutes is hung and belongs to the stuck-running sweep — redding the done stage for it would blame the stage that was waiting. This route refuses the condition back to its caller instead of abandoning silently (ErrDeployCheckoutBusy, the fourth non-failure deploy refusal), since there a person or an agent is waiting for an answer. A liveness answer that cannot be established — a nil lister, a failed listing — is not 'held': stalling every deploy on a docker hiccup costs more than the window it guards. The BOARD's routes no longer wait silently: they record the hold and move the item to deploy-queued (deploy-queued-behind-checkout, SC-5878). This route stays silent deliberately — its caller is answered with ErrDeployCheckoutBusy, it records nothing before a start by design, and both fix skills document exactly that (\"nothing failed, no marker is posted, and the card is not red\")."
+    },
+    {
+      "name": "deploy-queued-behind-checkout",
+      "src": [
+        "reviewed",
+        "stopped"
+      ],
+      "dst": "deploy-queued",
+      "actor": "user",
+      "marker": "[human:deploy-queued]",
+      "guard": "a board-<key>-implementation or board-<key>-verification container is alive in the checkout",
+      "where": "internal/daemon/board_transition.go openDraftPRAndReview → awaitCheckoutFree's onQueued callback (internal/daemon/board_checkout.go) → recordDeployQueued",
+      "doc": "Dropping on Done while this ticket's own container still holds the checkout. The gesture is accepted, so it is recorded: start-pr-review's marker comes only once the checkout is free, and until SC-5878 the minutes in between were written nowhere at all — the card re-derived to a finished review, the person read it as a bounce, and the re-drop passed every gate because isDuplicateDrop matches (stage, running) and nothing had put the card there. `stopped` is a source for start-pr-review's own reason: re-dropping a failed deploy is the same move (SC-735), and its [human:deploy-retry] grant is still minted before the stage starts."
+    },
+    {
+      "name": "deploy-queued-behind-checkout-redrive",
+      "src": [
+        "substrate-down",
+        "stopped"
+      ],
+      "dst": "deploy-queued",
+      "actor": "daemon",
+      "marker": "[human:deploy-queued]",
+      "guard": "a board-<key>-implementation or board-<key>-verification container is alive in the checkout",
+      "where": "internal/daemon/board_reconcile.go reconcileOutage and reconcileShippedFailures → RetryDeploy → runDoneStage → openDraftPRAndReview",
+      "doc": "The same hold, entered by the machine's own re-drives rather than by a person (redeploy-after-outage, redeploy-when-shippable). Split from deploy-queued-behind-checkout because the actor differs and a state's who_may_act is checked against the transitions that leave it — the same split start-pr-review and redeploy-after-outage already carry."
+    },
+    {
+      "name": "deploy-queue-released",
+      "src": [
+        "deploy-queued"
+      ],
+      "dst": "pr-review",
+      "actor": "daemon",
+      "marker": "[human:pr-review-started]",
+      "where": "internal/daemon/board_checkout.go awaitCheckoutFree returning nil → internal/daemon/board_transition.go openDraftPRAndReview → openDraftPR → launchPRReview",
+      "doc": "The container ended and the checkout is free, so the held deploy continues exactly as start-pr-review would have: the branch is pushed, the draft pull request opened, the machine reviewer launched. The queued record is superseded by the loop's own started marker (latest wins); nothing retracts it, because the wait ended the way it was meant to."
+    },
+    {
+      "name": "deploy-queue-abandoned",
+      "src": [
+        "deploy-queued"
+      ],
+      "dst": "reviewed",
+      "dst_is_derived": true,
+      "actor": "daemon",
+      "marker": "[human:deploy-queue-abandoned]",
+      "where": "internal/daemon/board_transition.go openDraftPRAndReview (on ErrDeployCheckoutBusy at the bound) → recordDeployQueueAbandoned, and internal/daemon/board_reconcile.go abandonStrandedQueuedDeploy for a record whose waiting run is gone",
+      "doc": "The hold gave up. Nothing was pushed and nothing failed, so this is NOT a deploy failure and the done stage is not redded for it: a container alive fifteen minutes past its own verdict is hung and the stuck-running sweep answers for it (SC-5691). The destination is DERIVED because the record is a RETRACTION, not a placement: DeriveBoardCard drops the deploy-queued records it withdraws (retireAbandonedQueuedDeploys), so the item returns to wherever the gesture found it — `reviewed` for a Deploy drop, `stopped` for a re-drop on a failed deploy, `substrate-down` for an outage re-drive — and the card says why (BoardCard.DeployQueueAbandoned, the marker's one-line reason). Classifying it into a stage of its own would hand a never-reviewed card a review it never had."
+    },
+    {
+      "name": "deploy-queue-duplicate-drop",
+      "src": [
+        "deploy-queued"
+      ],
+      "dst": "deploy-queued",
+      "actor": "user",
+      "moves_item": false,
+      "where": "internal/daemon/board_transition.go applyTransition → isDuplicateDrop",
+      "doc": "A second Deploy drop while one is queued. The card derives to (done, running) from the queued record, which is exactly what the duplicate guard matches, so the drop starts nothing and queues no second deploy — the hole SC-5878 closed was that a marker-less wait derived to a finished review instead, and every re-drop sailed through the gates."
     },
     {
       "name": "reopen-planning",
@@ -1325,7 +1408,7 @@
       "actor": "user",
       "marker": "[human:pr-review-started]",
       "where": "internal/daemon/board_transition.go runDoneStage — the Done stage opens the draft PR and launches the reviewer; isDeployRetry re-enters it on a card whose deploy already failed",
-      "guard": "no board-<key>-implementation or board-<key>-verification container is alive in the checkout — waited for, up to DeployCheckoutWaitBound (deploy-launch-deferred)",
+      "guard": "no board-<key>-implementation or board-<key>-verification container is alive in the checkout — recorded and waited for, up to DeployCheckoutWaitBound (deploy-queued-behind-checkout)",
       "doc": "Dropping on Done. The stage fronts the deploy with the PR review loop rather than posting deploy-started and merging, so the item enters the loop directly and deploying is never recorded on this path. Re-dropping a failed card is the same move, which is why stopped is a source: without it a conflicted deploy would be a dead end escapable only by re-implementing already-reviewed work (SC-735). From stopped the move does one thing more: it mints a [human:deploy-retry] grant worth one automated fix round, so a re-drop on a card whose deploy-fix budget is spent dispatches a fixer instead of re-finding the same conflict and reposting the same failure (SC-5595). Only this edge grants — the machine's own re-entries (redeploy-after-outage, redeploy-when-shippable) and `human deploy` do not, because a machine funding its own budget is not a bound."
     },
     {
@@ -1337,7 +1420,7 @@
       "actor": "daemon",
       "marker": "[human:pr-review-started]",
       "where": "internal/daemon/board_transition.go isDeployRetry — an outage card at the Done stage is relaunched in place exactly like a failed one, so the reconcile backoff can re-drive it (SC-2307)",
-      "guard": "no board-<key>-implementation or board-<key>-verification container is alive in the checkout — waited for, up to DeployCheckoutWaitBound (deploy-launch-deferred)",
+      "guard": "no board-<key>-implementation or board-<key>-verification container is alive in the checkout — recorded and waited for, up to DeployCheckoutWaitBound (deploy-queued-behind-checkout-redrive)",
       "doc": "The same re-entry as start-pr-review, made by the machine rather than by a person: an infrastructure failure is not the ticket's fault, so nobody should have to drag the card back. Split from start-pr-review because the actor differs, and a state's who_may_act is checked against the transitions that leave it. It is also the way back for a deploy-FIX round or either half of the review→fix loop that hit an outage: the re-drive re-enters the whole done stage, and the round it may re-dispatch is uncharged."
     },
     {
@@ -1348,7 +1431,7 @@
       "dst": "pr-review",
       "actor": "daemon",
       "marker": "[human:pr-review-started]",
-      "guard": "the newest done-stage marker is [human:deploy-failed], the forge reports the pull request mergeable with every check passing, no done-stage agent is alive and no deploy is running in this process, the branch resolves here, and the failure is older than FailedRecoveryGrace",
+      "guard": "the newest done-stage marker is [human:deploy-failed], the forge reports the pull request mergeable with every check passing, no done-stage agent is alive and no deploy is running in this process, the branch resolves here, and the failure is older than FailedRecoveryGrace — the same checkout interlock as every other done-stage launch applies through runDoneStage, recorded and waited for (deploy-queued-behind-checkout-redrive)",
       "where": "internal/daemon/board_reconcile.go reconcileShippedFailures → redriveShippableDeploy — the re-drive is ReconcileDeps.RetryDeploy, wired to the same in-place done-stage retry transition (isDeployRetry → runDoneStage) the Retry deploy gesture issues",
       "doc": "The red deploy card, re-observed. The failure was written from one look at the pull request and nothing looked again, so a deploy the machine had already fixed kept asking a person to fix it (SC-3640, on SC-3508's PR #408). Split from start-pr-review because the actor differs — a person dropping on Done versus the machine acting on evidence — and a state's who_may_act is checked against the transitions that leave it. It never fires on an unknown or unreadable state: mergeable-with-everything-green is the only answer it acts on, and a pending check, an absent check list or a probe error all leave the card red. Charges no retry budget: unlike every other recovery from stopped it acts on positive evidence that the deploy is ready to ship, not on a guess that another attempt might work, so a spent budget cannot keep a green, mergeable pull request behind a red card. It mints no deploy-fix grant either: the grant is a person's answer to a spent budget (start-pr-review, SC-5595), and this pass has no person behind it — it reaches the transition through ApplyRetryTransition, whose origin is the machine's, which is what separates it from the gesture since both send an empty Cause."
     },
@@ -1404,7 +1487,7 @@
     "doc": "How an item shows that it is moving. Each in-container phase writes stage.<name> to `human state` with a timestamp — preflight, triage, challenge, fix, verify, review, pr-review, pr-fix, deploy-fix — and the board reads the newest one onto a running OR ended card as `activity`, bounded to the phase records the card's own current run wrote (see note). A card in the done stage's review→fix loop also carries which round it is in (prReviewRound, from chargedPRReviewRounds — the same counter the loop's own outer bound reads, which gives back a round an outage interrupted) against DefaultPRReviewRounds: the two halves alternate their word every round, so a loop going in circles read exactly like one converging.",
     "why": "Between implementation-started and ready-for-review an item passes through six phases that all render as one unchanging word. That word is identical at thirty seconds, at fourteen hours, and when the agent behind it is dead, so nothing on the card distinguishes progress from a hang. The phase changing is the signal; its not changing is the other one.",
     "where": "internal/board/activity.go; attached in cmd/cmddaemon/daemon.go attachActivity; the round in internal/daemon/board_state.go prLoopRoundFor, copied in internal/board/compose.go",
-    "note": "Read for a card whose run is working (running) or has ENDED (failed, resolved) — an ended card's phase is how far it got, rendered past-tense with no spinner and no age; a paused (outage) card is excluded because it has not ended. Never invented: a run that recorded no phase shows the stage word exactly as before, and a round that cannot be read is shown as nothing rather than as zero (SC-3656). The stage.* records are keyed on the ticket alone and accumulate for its whole life with no clearing path, so the read is bounded to entries at or after the card's own current run started (BoardCard.StageRunStartedAt) — a stage reaped or crashed before writing anything of its own then shows nothing rather than borrowing an earlier, unrelated stage's leftover phase (SC-3656 PR review finding)."
+    "note": "Read for a card whose run is working (running) or has ENDED (failed, resolved) — an ended card's phase is how far it got, rendered past-tense with no spinner and no age; a paused (outage) card is excluded because it has not ended. Never invented: a run that recorded no phase shows the stage word exactly as before, and a round that cannot be read is shown as nothing rather than as zero (SC-3656). The stage.* records are keyed on the ticket alone and accumulate for its whole life with no clearing path, so the read is bounded to entries at or after the card's own current run started (BoardCard.StageRunStartedAt) — a stage reaped or crashed before writing anything of its own then shows nothing rather than borrowing an earlier, unrelated stage's leftover phase (SC-3656 PR review finding). One running card deliberately ignores the phase record: a deploy queued behind this ticket's own container (DeployPhase \"deploy-queued\") shows what it is waiting for, because the stage.* records it would otherwise show are being written by the very container it waits on (SC-5878)."
   },
   "invariants": {
     "doc": "What each state guarantees while an item sits in it. The transition table says how an item MOVES; these four fields say what is true when it does not, which is the question the pipeline's stuck-card bugs kept turning out to be.",

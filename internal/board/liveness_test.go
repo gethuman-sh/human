@@ -259,6 +259,9 @@ func TestMarkAgentLiveness_unparseableTimestampIsNeverDead(t *testing.T) {
 // three deploy entry routes leaves one set: [human:deploy-started] and
 // [human:deploy-fix-started] are not loop halves, and [human:pr-review-passed]
 // retires the phase (board_state.go, deployPhaseFor).
+// SC-5878: none of the deploy entry routes leaves one set — and a fourth value
+// exists that names no half either: a deploy queued behind this ticket's own
+// container.
 func TestMarkAgentLiveness_plainDeployHasNoAgentToMiss(t *testing.T) {
 	c := card("SC-1", string(daemon.BoardDoneStage), string(daemon.BoardRunning), "d1", 3*time.Hour, livenessNow)
 	c.DeployPhase = ""
@@ -279,6 +282,12 @@ func TestMarkAgentLiveness_plainDeployHasNoAgentToMiss(t *testing.T) {
 	cards2 := []daemon.BoardViewCard{c2}
 	MarkAgentLiveness(cards2, LiveAgents{Names: map[string]bool{}, DaemonID: "d1", Now: livenessNow})
 	assert.Empty(t, cards2[0].AgentLiveness, "an approve-then-merge deploy runs in-process too; it never had an agent")
+
+	c3 := card("SC-1", string(daemon.BoardDoneStage), string(daemon.BoardRunning), "d1", 3*time.Hour, livenessNow)
+	c3.DeployPhase = daemon.DeployPhaseQueued
+	cards3 := []daemon.BoardViewCard{c3}
+	MarkAgentLiveness(cards3, LiveAgents{Names: map[string]bool{}, DaemonID: "d1", Now: livenessNow})
+	assert.Empty(t, cards3[0].AgentLiveness, "a queued deploy waits in the daemon; it never had an agent")
 }
 
 func TestMarkAgentLiveness_prLoopJoinsEitherHalf(t *testing.T) {

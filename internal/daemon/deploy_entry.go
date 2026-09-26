@@ -147,8 +147,11 @@ func (d BoardTransitionDeps) StartDeploy(ctx context.Context, req StartDeployReq
 	// pushed, like the three refusals above: a deploy that never began must not
 	// record a start. It is NOT skipped by --ready — that flag overrides the
 	// machine review, and the engine it runs writes to the same tree the
-	// implementation container holds (SC-5691).
-	if err := d.awaitCheckoutFree(ctx, req.PMKey); err != nil {
+	// implementation container holds (SC-5691). nil is passed for the
+	// queued-deploy record on purpose: this route answers its caller with
+	// ErrDeployCheckoutBusy, so the wait has a reader without a comment, and both
+	// fix skills document that this refusal posts no marker (SC-5878 AD3).
+	if err := d.awaitCheckoutFree(ctx, req.PMKey, nil); err != nil {
 		return StartDeployResult{}, err
 	}
 	if err := d.recordDeployStart(ctx, req, override); err != nil {

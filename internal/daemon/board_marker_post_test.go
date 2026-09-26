@@ -18,6 +18,19 @@ func composedOptionsBody(stage BoardStage, context string, opts []BoardOption) s
 	return markerBody(m, order...)
 }
 
+// composedDeployQueuedBody and composedDeployQueueAbandonedBody render the
+// interlock's two records through the real composers (SC-5878), the same
+// pattern composedOptionsBody uses.
+func composedDeployQueuedBody(holder string) string {
+	m, order := deployQueuedMarker(holder)
+	return markerBody(m, order...)
+}
+
+func composedDeployQueueAbandonedBody(reason, agent, waited string) string {
+	m, order := deployQueueAbandonedMarker(reason, agent, waited)
+	return markerBody(m, order...)
+}
+
 // TestDaemonPostedMarkersSatisfyTheirContract walks every marker type the
 // daemon writes, composes it the way the daemon composes it, and puts the
 // rendered body back through the protocol's own reader and validator.
@@ -109,6 +122,15 @@ func TestDaemonPostedMarkersSatisfyTheirContract(t *testing.T) {
 			"the run stopped before finishing this stage — check the evidence below, then Retry\n\nlast output: [human] claude exec exited with code 1"))},
 		{MarkerRelated, markerBody(marker.Marker{Type: MarkerRelated, Head: "incomplete",
 			Body: "the run stopped before finishing this stage"})},
+		// SC-5878: the interlock's two records — the accept-time hold and its
+		// withdrawal. The withdrawal is checked in BOTH shapes it is posted in:
+		// the in-process one that knows the agent and the wait, and the durable
+		// one that knows neither.
+		{MarkerDeployQueued, composedDeployQueuedBody("board-SC-1-implementation")},
+		{MarkerDeployQueueAbandoned, composedDeployQueueAbandonedBody(
+			"board-SC-1-implementation did not release the checkout within 15m0s", "board-SC-1-implementation", "15m0s")},
+		{MarkerDeployQueueAbandoned, composedDeployQueueAbandonedBody(
+			"no daemon is waiting for the checkout any more — the run that accepted this deploy stopped", "", "")},
 	}
 
 	// A decision block only validates when its field order is the one the real

@@ -478,6 +478,12 @@ func stuckGraceFor(derived BoardCard, comments []tracker.Comment) time.Duration 
 	if derived.Stage == BoardDoneStage && deployEngineRunning(comments) {
 		return deployTimeout + StuckRunningGrace
 	}
+	// A queued deploy owns its own clock: the in-process wait runs for
+	// DeployCheckoutWaitBound before it withdraws its own record, so judging it on
+	// the ordinary grace would race the wait it is waiting for.
+	if derived.Stage == BoardDoneStage && deployQueueWaiting(comments) {
+		return DeployCheckoutWaitBound + StuckRunningGrace
+	}
 	return StuckRunningGrace
 }
 
@@ -927,6 +933,31 @@ func completeStrandedPlanHandoff(ctx context.Context, card ReconcileCard, derive
 	return true
 }
 
+// abandonStrandedQueuedDeploy is the non-failure twin of completeStrandedPlanHandoff
+// for a queued deploy: the run that accepted the drop and started waiting for the
+// checkout stopped before the wait ended, so the in-process withdrawal
+// (recordDeployQueueAbandoned) never ran. Nothing was pushed and nothing failed,
+// so this withdraws the record rather than reddening the done stage — the same
+// rule that keeps a container's own hang from redding the stage waiting on it
+// (SC-5691, SC-5878). Idempotent by construction: once the withdrawal is posted,
+// retireAbandonedQueuedDeploys removes the queued record, so the next tick's
+// deployQueueWaiting is false.
+func abandonStrandedQueuedDeploy(ctx context.Context, card ReconcileCard, derived BoardCard, deps ReconcileDeps) bool {
+	if derived.Stage != BoardDoneStage || !deployQueueWaiting(card.Comments) {
+		return false
+	}
+	m, order := deployQueueAbandonedMarker(
+		"no daemon is waiting for the checkout any more — the run that accepted this deploy stopped", "", "")
+	if err := deps.PostFailed(ctx, card.Key, markerBody(m, order...)); err != nil {
+		deps.Logger.Warn().Err(err).Str("pm", card.Key).
+			Msg("board reconcile: cannot withdraw a stranded queued deploy; leaving the card as it is")
+		return false
+	}
+	deps.Logger.Info().Str("pm", card.Key).
+		Msg("board reconcile: withdrew a queued deploy left behind by a stopped run; the card is back where the drop found it")
+	return true
+}
+
 // reconcileOneStuckCard applies the stuck-running judgement to a single card
 // and reports whether it was reddened. Split out of reconcileStuckRunning so
 // that function's per-card branching costs its own function rather than the
@@ -948,6 +979,14 @@ func reconcileOneStuckCard(ctx context.Context, card ReconcileCard, alive map[st
 	// A planning run that attached its plan before dying produced what the next
 	// stage needs; redding it would re-plan an attached plan (SC-5090).
 	if completeStrandedPlanHandoff(ctx, card, derived, deps, silenced, reap) {
+		return false
+	}
+	// A queued deploy nobody is waiting for any more — the daemon that accepted the
+	// drop stopped mid-wait — is WITHDRAWN, not reddened: nothing was pushed and
+	// nothing failed, and redding the done stage for another stage's container is
+	// exactly the blame SC-5691 refuses. The non-failure twin of
+	// completeStrandedPlanHandoff, posted the same way (SC-5878).
+	if abandonStrandedQueuedDeploy(ctx, card, derived, deps) {
 		return false
 	}
 	// Repeated silence reaps are bounded and visible, identically to the live

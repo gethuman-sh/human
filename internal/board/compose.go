@@ -78,6 +78,7 @@ func Compose(results []daemon.TrackerIssuesResult, dockerAvailable bool) daemon.
 			DeployPhase:            card.DeployPhase,
 			PRReviewRound:          card.PRReviewRound,
 			PRReviewRoundCap:       card.PRReviewRoundCap,
+			DeployQueueAbandoned:   card.DeployQueueAbandoned,
 			RunningStage:           string(card.RunningStage),
 			Labels:                 issue.Labels,
 			Description:            issue.Description,

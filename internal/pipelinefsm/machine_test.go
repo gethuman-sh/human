@@ -84,9 +84,7 @@ func TestMermaid_SaysWhenTheMarkerIsPerStage(t *testing.T) {
 // SC-4244: a launch the single-flight guard refused records nothing and moves
 // nothing, so each of its six events must be a true self-loop with no marker.
 // A placeholder dst would draw a real exit in the diagram and let a future trap
-// state hide behind an edge no item ever takes. The seventh is the deploy
-// deferred behind the checkout interlock (SC-5691) — it records nothing for
-// the same reason the six refusals do.
+// state hide behind an edge no item ever takes.
 func TestTheRefusalEventsAreSelfLoopsThatRecordNothing(t *testing.T) {
 	doc, err := pipelinefsm.Load()
 	require.NoError(t, err)
@@ -98,7 +96,6 @@ func TestTheRefusalEventsAreSelfLoopsThatRecordNothing(t *testing.T) {
 		"pr-review-launch-refused":    false,
 		"pr-fix-launch-refused":       false,
 		"deploy-fixer-launch-refused": false,
-		"deploy-launch-deferred":      false,
 	}
 	for _, e := range doc.Events {
 		if _, ok := want[e.Name]; !ok {
@@ -115,4 +112,33 @@ func TestTheRefusalEventsAreSelfLoopsThatRecordNothing(t *testing.T) {
 	for name, found := range want {
 		assert.True(t, found, "%s is missing from the document", name)
 	}
+}
+
+// SC-5878: deploy-launch-deferred (the CLI route's silent wait, SC-5691) is no
+// longer a true self-loop: since `human deploy` can enter the checkout wait
+// from any of start-deploy's own sources — a card fresh out of planning as
+// easily as a reviewed one — its src is that same wide list, while its dst
+// stays the fixed placeholder "reviewed" (the ordinary case, and the one every
+// existing assertion about this event already pinned). It still records
+// nothing and moves nothing; only the "one source, dst equals it" shape the
+// six single-flight refusals share no longer applies, because those refusals
+// each guard exactly one running stage, not a CLI entry point with seven.
+func TestDeployLaunchDeferredRecordsNothingAcrossEverySource(t *testing.T) {
+	doc, err := pipelinefsm.Load()
+	require.NoError(t, err)
+
+	found := false
+	for _, e := range doc.Events {
+		if e.Name != "deploy-launch-deferred" {
+			continue
+		}
+		found = true
+		assert.Contains(t, e.Src, "reviewed")
+		assert.Equal(t, "reviewed", e.Dst)
+		assert.False(t, e.Moves(), "deploy-launch-deferred must declare moves_item: false")
+		assert.Empty(t, e.Marker, "the absence of a marker IS the fix")
+		assert.NotEmpty(t, e.Doc, "say why it records nothing")
+		assert.Contains(t, e.Where, "deploy_entry.go", "name the CLI's own entry point")
+	}
+	assert.True(t, found, "deploy-launch-deferred is missing from the document")
 }
