@@ -270,19 +270,27 @@ type WizardState struct {
 
 // DefaultProxyDomains provides a sensible allowlist for new projects.
 //
-// github.com is listed beside *.github.com because the matcher is DNS-style and
-// a wildcard never covers the apex (internal/proxy/policy.go), while git remotes
-// live on the bare host — without the apex entry every freshly initialised
-// project shipped containers that could not fetch (SC-5593).
+// Every wildcard entry is paired with its apex. The matcher is DNS-style and a
+// wildcard never covers the apex (internal/proxy/policy.go), so a list that
+// trusts "*.vendor.com" but not "vendor.com" trusts a vendor by accident of the
+// matcher rather than by decision — and the apex is where git remotes and plain
+// vendor hosts live. That asymmetry shipped containers that could not fetch
+// (SC-5593, github.com) and then presented the same failure as a six-hour
+// network outage (SC-5840). Pairing costs nothing in exposure: every subdomain
+// of these hosts is already allowed.
 var DefaultProxyDomains = []string{
 	"*.github.com",
 	"github.com",
 	"api.openai.com",
 	"claude.ai",
 	"*.googleapis.com",
+	"googleapis.com",
 	"*.githubusercontent.com",
+	"githubusercontent.com",
 	"*.claude.com",
+	"claude.com",
 	"*.anthropic.com",
+	"anthropic.com",
 }
 
 // StackToLspBinary maps devcontainer feature keys to LSP binary names
