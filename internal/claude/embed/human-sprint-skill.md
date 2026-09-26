@@ -49,7 +49,7 @@ Store the user's choice as `<pipeline_depth>`.
 2. Delegate to the **human-ideator** agent (Phase 1 — context gathering):
 
 ```
-Task(subagent_type="human-ideator", prompt="Phase 1: Gather context for the idea: $ARGUMENTS. Explore the codebase for relevant code, existing patterns, recent git history, existing tickets, and any .human/ artifacts. Return a context summary and suggested forcing questions.")
+Task(subagent_type="human-ideator", model="opus", prompt="Phase 1: Gather context for the idea: $ARGUMENTS. Explore the codebase for relevant code, existing patterns, recent git history, existing tickets, and any .human/ artifacts. Return a context summary and suggested forcing questions.")
 ```
 
 3. Present the agent's context summary to the user.
@@ -68,7 +68,7 @@ Task(subagent_type="human-ideator", prompt="Phase 1: Gather context for the idea
 7. Delegate to the **human-ideator** agent (Phase 2 — generate ticket content):
 
 ```
-Task(subagent_type="human-ideator", prompt="Phase 2: Generate PM ticket content for the idea: $ARGUMENTS. Forcing question answers: <paste all Q&A pairs>. Scope choice: <user's scope choice>. Tracker: <chosen tracker>. Generate a structured ticket with problem statement, user story, acceptance criteria, scope decisions, and challenge record.")
+Task(subagent_type="human-ideator", model="opus", prompt="Phase 2: Generate PM ticket content for the idea: $ARGUMENTS. Forcing question answers: <paste all Q&A pairs>. Scope choice: <user's scope choice>. Tracker: <chosen tracker>. Generate a structured ticket with problem statement, user story, acceptance criteria, scope decisions, and challenge record.")
 ```
 
 8. Create PM ticket on the chosen tracker:

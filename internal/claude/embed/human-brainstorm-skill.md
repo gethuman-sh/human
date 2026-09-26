@@ -27,7 +27,7 @@ human pipeline init brainstorms
 The command creates `.human/brainstorms/` and prints the pipeline paths as JSON — remember the `candidates` path for the triage phase.
 
 ```
-Task(subagent_type="brainstorm-recon", prompt="Survey this project's codebase and fetch completed tickets. Tracker info from user: <tracker-info>. Focus area (if any): $ARGUMENTS. Write your recon report to .human/brainstorms/.brainstorm-recon.md")
+Task(subagent_type="brainstorm-recon", model="opus", prompt="Survey this project's codebase and fetch completed tickets. Tracker info from user: <tracker-info>. Focus area (if any): $ARGUMENTS. Write your recon report to .human/brainstorms/.brainstorm-recon.md")
 ```
 
 Wait for the recon agent to finish before proceeding.
@@ -37,11 +37,11 @@ Wait for the recon agent to finish before proceeding.
 Launch all 3 analysis agents **in a single message** so they run in parallel:
 
 ```
-Task(subagent_type="brainstorm-codebase", prompt="Read the recon report at .human/brainstorms/.brainstorm-recon.md, then analyze the codebase to identify missing features the architecture could support. Append each missing-feature candidate with `human pipeline append brainstorms` and write your context analysis to .human/brainstorms/.brainstorm-codebase.md")
+Task(subagent_type="brainstorm-codebase", model="sonnet", prompt="Read the recon report at .human/brainstorms/.brainstorm-recon.md, then analyze the codebase to identify missing features the architecture could support. Append each missing-feature candidate with `human pipeline append brainstorms` and write your context analysis to .human/brainstorms/.brainstorm-codebase.md")
 
-Task(subagent_type="brainstorm-trajectory", prompt="Read the recon report at .human/brainstorms/.brainstorm-recon.md, then analyze completed tickets and git history to identify missing features based on development patterns. Append each missing-feature candidate with `human pipeline append brainstorms` and write your context analysis to .human/brainstorms/.brainstorm-trajectory.md")
+Task(subagent_type="brainstorm-trajectory", model="sonnet", prompt="Read the recon report at .human/brainstorms/.brainstorm-recon.md, then analyze completed tickets and git history to identify missing features based on development patterns. Append each missing-feature candidate with `human pipeline append brainstorms` and write your context analysis to .human/brainstorms/.brainstorm-trajectory.md")
 
-Task(subagent_type="brainstorm-opportunities", prompt="Read the recon report at .human/brainstorms/.brainstorm-recon.md, then scan for developer signals (TODOs, FIXMEs) and common-pattern gaps to identify missing features. Append each missing-feature candidate with `human pipeline append brainstorms` and write your context analysis to .human/brainstorms/.brainstorm-opportunities.md")
+Task(subagent_type="brainstorm-opportunities", model="sonnet", prompt="Read the recon report at .human/brainstorms/.brainstorm-recon.md, then scan for developer signals (TODOs, FIXMEs) and common-pattern gaps to identify missing features. Append each missing-feature candidate with `human pipeline append brainstorms` and write your context analysis to .human/brainstorms/.brainstorm-opportunities.md")
 ```
 
 Wait for all 3 agents to finish before proceeding.

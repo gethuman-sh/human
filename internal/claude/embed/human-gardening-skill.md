@@ -18,7 +18,7 @@ human pipeline init gardening
 This creates `.human/gardening/` and prints the pipeline paths (`root`, `candidates`, `state`). Note the `candidates` path — you pass it to the triage agent in Phase 3.
 
 ```
-Task(subagent_type="gardening-survey", prompt="Survey this codebase for health analysis. Write your survey report to .human/gardening/.gardening-survey.md")
+Task(subagent_type="gardening-survey", model="opus", prompt="Survey this codebase for health analysis. Write your survey report to .human/gardening/.gardening-survey.md")
 ```
 
 Wait for the survey agent to finish before proceeding.
@@ -28,13 +28,13 @@ Wait for the survey agent to finish before proceeding.
 Launch all 4 analysis agents **in a single message** so they run in parallel:
 
 ```
-Task(subagent_type="gardening-structure", prompt="Read the survey report at .human/gardening/.gardening-survey.md, then analyze the codebase for architectural imbalances, misplaced types, and leaky abstractions. Report each finding with `human pipeline append gardening`")
+Task(subagent_type="gardening-structure", model="sonnet", prompt="Read the survey report at .human/gardening/.gardening-survey.md, then analyze the codebase for architectural imbalances, misplaced types, and leaky abstractions. Report each finding with `human pipeline append gardening`")
 
-Task(subagent_type="gardening-duplication", prompt="Read the survey report at .human/gardening/.gardening-survey.md, then analyze the codebase for structural clones, repeated patterns, and extractable utilities. Report each finding with `human pipeline append gardening`")
+Task(subagent_type="gardening-duplication", model="sonnet", prompt="Read the survey report at .human/gardening/.gardening-survey.md, then analyze the codebase for structural clones, repeated patterns, and extractable utilities. Report each finding with `human pipeline append gardening`")
 
-Task(subagent_type="gardening-complexity", prompt="Read the survey report at .human/gardening/.gardening-survey.md, then analyze the codebase for long functions, deep nesting, cyclomatic complexity, and dead code. Report each finding with `human pipeline append gardening`")
+Task(subagent_type="gardening-complexity", model="sonnet", prompt="Read the survey report at .human/gardening/.gardening-survey.md, then analyze the codebase for long functions, deep nesting, cyclomatic complexity, and dead code. Report each finding with `human pipeline append gardening`")
 
-Task(subagent_type="gardening-hygiene", prompt="Read the survey report at .human/gardening/.gardening-survey.md, then analyze the codebase for naming inconsistencies, test health issues, dependency problems, and convention violations. Report each finding with `human pipeline append gardening`")
+Task(subagent_type="gardening-hygiene", model="sonnet", prompt="Read the survey report at .human/gardening/.gardening-survey.md, then analyze the codebase for naming inconsistencies, test health issues, dependency problems, and convention violations. Report each finding with `human pipeline append gardening`")
 ```
 
 The append command writes all findings into the shared candidates file race-free, so the agents can run in parallel without coordinating.
