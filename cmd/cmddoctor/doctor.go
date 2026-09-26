@@ -23,7 +23,10 @@ func BuildDoctorCmd() *cobra.Command {
 		Short: "Check the health of the agent pipeline's substrate",
 		Long: "Runs the daemon's preflight checks (tracker credentials, docker, proxy CA,\n" +
 			"agent skills, persistence) and prints each with its fix. The board's status\n" +
-			"LED shows the same result.",
+			"LED shows the same result.\n\n" +
+			"'human doctor toolchain' is the one check that answers about the machine it runs\n" +
+			"on rather than the daemon's host: a container asking whether its Go satisfies the\n" +
+			"project's go.mod.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			out := cmd.OutOrStdout()
 
@@ -65,6 +68,7 @@ func BuildDoctorCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&refresh, "refresh", false, "force a live check run instead of the cached result")
+	cmd.AddCommand(buildToolchainCmd())
 	return cmd
 }
 
