@@ -260,7 +260,7 @@ container. All of these must hold:
 - it carries no open `[human:options]` block for its own stage or an earlier one
   (that is a deliberate human pause, not a hang);
 - its stage has a `*-failed` marker header available;
-- it has sat past its grace — `StuckRunningGrace` = **15 minutes** for every stage except a card recorded as *deploying*, whose newest done-stage marker is `[human:deploy-started]`: that one is left alone for `deployTimeout + StuckRunningGrace` = **60 minutes**, because a deploy has no agent to probe and its CI gate legitimately blocks for 45 (`stuckPastGrace`, `internal/daemon/board_reconcile.go`), and measured from the ENGINE's clock rather than the marker post: `DeployBranch` records the instant it leaves the unbounded `deployGate`, and while a run is still queued the clock is the last time the queue moved — so a deploy waiting behind another is spared while the queue advances and judged once it has stopped (SC-4150). The marker clock is the fallback, used where this machine is not the one running the deploy (a peer daemon, a restart that lost the record), so the pass stays bounded rather than exempt. The rule is keyed by the in-flight run, not by which marker is newest, so the approve-branch (`[human:pr-review-passed]`) route gets the same clock as `[human:deploy-started]`. The deploy **fixer** does not: `DeployBranch` unregisters its run (`deployRunFinished`) the moment it dispatches a fixer and returns, so a running fixer has no registered engine run and is judged on the ordinary 15-minute marker clock. What spares it is liveness, not the grace — the sweep asks all three of the done stage's agent names (`stageAgentNames`) and `board-<key>-deployfix` is one of them. Before SC-5396 it asked only for `board-<key>-done`, a name nothing launches, and redded every fixer that ran past fifteen minutes while it worked. Where the clock is the marker, it is the stage's newest *classified* marker — and a relaunch refused because an agent is already running posts none, so refused relaunches no longer refresh it and the grace runs from the start of the run that is actually running (SC-4244);
+- it has sat past its grace — `StuckRunningGrace` = **15 minutes** for every stage except two, both a card in the done stage (`stuckGraceFor`, `internal/daemon/board_reconcile.go`): a card recorded as *deploying*, whose newest done-stage marker is `[human:deploy-started]`, is left alone for `deployTimeout + StuckRunningGrace` = **60 minutes**, because a deploy has no agent to probe and its CI gate legitimately blocks for 45 (`stuckPastGrace`, same file), and measured from the ENGINE's clock rather than the marker post: `DeployBranch` records the instant it leaves the unbounded `deployGate`, and while a run is still queued the clock is the last time the queue moved — so a deploy waiting behind another is spared while the queue advances and judged once it has stopped (SC-4150). The marker clock is the fallback, used where this machine is not the one running the deploy (a peer daemon, a restart that lost the record), so the pass stays bounded rather than exempt. The rule is keyed by the in-flight run, not by which marker is newest, so the approve-branch (`[human:pr-review-passed]`) route gets the same clock as `[human:deploy-started]`. The deploy **fixer** does not: `DeployBranch` unregisters its run (`deployRunFinished`) the moment it dispatches a fixer and returns, so a running fixer has no registered engine run and is judged on the ordinary 15-minute marker clock. What spares it is liveness, not the grace — the sweep asks all three of the done stage's agent names (`stageAgentNames`) and `board-<key>-deployfix` is one of them. Before SC-5396 it asked only for `board-<key>-done`, a name nothing launches, and redded every fixer that ran past fifteen minutes while it worked. Where the clock is the marker, it is the stage's newest *classified* marker — and a relaunch refused because an agent is already running posts none, so refused relaunches no longer refresh it and the grace runs from the start of the run that is actually running (SC-4244). A card *queued* behind its own ticket's implementation checkout (`deployQueueWaiting`, its newest done-stage marker `[human:deploy-queued]`) gets the second exception: `DeployCheckoutWaitBound + StuckRunningGrace` = **30 minutes**, because the in-process wait that accepted the drop runs for `DeployCheckoutWaitBound` (15m) on its own clock before it withdraws its own record, and judging the card on the ordinary grace would race that wait rather than the death it exists to catch (SC-5878);
 - it passed the `forTakeover` ownership gate — this machine participates in the
   project, no peer daemon owns the stage, and the branch resolves here (SC-2047);
 - and the stage agent, which *is* alive on this machine, reports stalled.
@@ -286,6 +286,19 @@ idle/budget/outstanding observation `stuckRunningSilenceBody` would have
 recorded rides along as fields on that same `plan-ready` marker (SC-2447/
 SC-3074's trail requirement).
 
+**A second non-failure ending: a queued deploy nobody is waiting for any
+more.** `abandonStrandedQueuedDeploy` (`internal/daemon/board_reconcile.go`)
+runs right after `completeStrandedPlanHandoff` and, for a done-stage card
+whose newest marker is still `[human:deploy-queued]` (`deployQueueWaiting`),
+withdraws the queued record — posts `[human:deploy-queue-abandoned]` through
+the same `PostFailed` path, without reddening the card — instead of treating
+the stopped run as a hang. Nothing was pushed and nothing failed; the daemon
+that accepted the drop stopped mid-wait, and reddening the DONE stage over
+another stage's container holding the checkout is exactly the blame SC-5691
+already refused (SC-5878). Same shape as the planning exception — posted
+through `PostFailed`, returns not-reddened — different precondition and a
+different marker.
+
 ### 6. Reconcile — stuck-running card, agent vanished
 
 Same pass, same preconditions, but no agent for `(key, stage)` is alive at all —
@@ -293,12 +306,16 @@ for the done stage, none of `board-<key>-prreview`, `board-<key>-prfix`,
 `board-<key>-deployfix`. Nothing is reaped here — the container is already gone. This is the fallback for
 a death the live failure watcher missed (a daemon restart, a dropped event), and
 unlike § 5 it is a genuine unexplained death, so it reds the card and relaunches
-on the **charged** path — with the same planning exception as § 5:
-`completeStrandedPlanHandoff` runs ahead of the reddening here too, so a
+on the **charged** path — with the same two exceptions as § 5, in the same
+order: `completeStrandedPlanHandoff` runs ahead of the reddening here too, so a
 vanished planning agent whose plan is attached is completed, not reddened
 (SC-5090). Because the run genuinely vanished rather than being stopped by
 this pass, the completion here uses the ordinary "exited before posting this
-handoff" wording — there is no stop observation to carry.
+handoff" wording — there is no stop observation to carry. `abandonStrandedQueuedDeploy`
+runs next, exactly as in § 5: a vanished agent behind a still-queued deploy is
+withdrawn, not reddened — the queued deploy has no agent to vanish in the first
+place (the wait is in-process, not a container), so this is the fallback for a
+daemon restart losing the in-flight wait mid-`DeployCheckoutWaitBound` (SC-5878).
 
 The deploy grace above applies here too — a `human deploy` on its CI gate has
 *no* agent by construction, so a vanished agent is not evidence a deploy is dead
@@ -441,6 +458,15 @@ Collected in one place, because the spares are the load-bearing part:
   newest marker is already its own `*-failed` header: a planner that attached
   its plan and then deliberately posted its own failure is a decision about
   the ticket, not an incomplete stage to complete over.
+- **A done-stage card queued behind its own ticket's implementation
+  checkout** (`deployQueueWaiting`: newest done-stage marker
+  `[human:deploy-queued]`), whether its accepting run is still live and judged
+  hung (§ 5) or has vanished outright (§ 6): `abandonStrandedQueuedDeploy`
+  withdraws the queued record — `[human:deploy-queue-abandoned]` through
+  `PostFailed` — instead of reddening the card. Nothing was pushed and nothing
+  failed; the container the deploy was waiting on is another stage's, and
+  reddening the done stage for it is the blame SC-5691 already refused
+  (SC-5878).
 - **A card with an open `[human:options]` block** for its own or an earlier stage.
 - **A card in an active PR review→fix loop**, whose half-agents legitimately come
   and go between rounds.
@@ -640,6 +666,7 @@ waiting on.
 | `BoardReconcileInterval` | 2m ± 50% jitter | `internal/daemon/board_reconcile.go` |
 | `StuckRunningGrace` | 15m | same |
 | deploy-card grace (`stuckPastGrace`, not a named constant) | 60m (`deployTimeout` + `StuckRunningGrace`), from the engine's dequeue where known, else the marker | `internal/daemon/board_reconcile.go` |
+| queued-deploy grace (`stuckGraceFor`, not a named constant) | 30m (`DeployCheckoutWaitBound` + `StuckRunningGrace`) | same |
 | hung-agent stop timeout | 60s | `cmd/cmddaemon/daemon.go` |
 | close-cancel stop budget | 90s | same |
 | `MaxSilenceReaps` | 3 | `internal/daemon/board_failure.go` |
