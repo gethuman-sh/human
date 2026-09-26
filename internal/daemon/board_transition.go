@@ -307,12 +307,13 @@ type BoardTransitionDeps struct {
 	// the hook path after the snapshot was taken — and escalating it reds a
 	// card over a live fixer (SC-5120). nil disables the check.
 	LoopStepAlive func(agentName string) bool
-	// Getter fetches the PM ticket so a recovery relaunch of the implementation
-	// stage can tell a self-planning fix pipeline (bug/security — which produces
-	// its own plan within the run) from a plan-executing build, and re-dispatch
-	// the right path. nil disables kind classification: the relaunch then falls
-	// back to the [human:bug-verdict] marker heuristic and finally to the plain
-	// build retry (SC-2986).
+	// Getter fetches the PM ticket so classifyFixPipeline can tell a self-planning
+	// fix pipeline (bug/security — which produces its own plan within the run)
+	// from a plan-executing ticket, and re-dispatch the right path — on a
+	// recovery relaunch of implementation AND on a planning dispatch, first or
+	// relaunched (SC-5793). nil disables kind classification: the caller then
+	// falls back to the [human:bug-verdict] marker heuristic and finally to the
+	// plain build retry or feature planning (SC-2986).
 	Getter tracker.Getter
 	// LiveAgents lists the board agents running on this machine, so a starting
 	// deploy can tell whether the implementation container still holds the
@@ -754,12 +755,18 @@ func (d BoardTransitionDeps) ApplyFix(ctx context.Context, req BoardFixRequest) 
 // (SC-2596).
 //
 // It carries NO idempotency guard of its own. The two gesture entry points
-// (ApplyFix, ApplySecurityFix) check for a running stage before calling; the
-// paths that resume a decision must not, because the agent that RAISED the
+// (ApplyFix, ApplySecurityFix) check for a running stage before calling; every
+// other caller must not, and for a different reason each. The paths that resume
+// a decision (launchDecidedStage's BoardImplementation case, and the BoardPlanning
+// case by way of launchPlanningOrFix) must not, because the agent that RAISED the
 // decision leaves a [human:implementation-started] marker standing — a stage
 // that pauses on an open block posts no *-failed marker (stagePausedOnOptions),
 // so a marker-shaped guard reads the dead run as live and swallows the resume.
-// Those paths establish liveness the honest way, from the running containers.
+// launchPlanningOrFix's other callers (isPlanningRetry, reopenResolved,
+// launchForwardStage's BoardPlanning case) and resumeFixInsteadOfPlanning
+// likewise establish liveness the honest way, from the running containers, before
+// ever reaching here — the guard they need is classifyFixPipeline answering
+// fixNone, not a second check of this launcher.
 func (d BoardTransitionDeps) launchFixPipeline(ctx context.Context, pmKey string, kind fixPipeline, extra string) (bool, error) {
 	skill, identity := "/human-autofix ", "fix"
 	if kind == fixSecurity {
@@ -3320,9 +3327,16 @@ const (
 	fixSecurity                    // security-fix (/human-security-fix)
 )
 
-// classifyFixPipeline reports which self-planning fix pipeline should own a
-// recovery relaunch of the implementation stage. The ticket kind is
-// authoritative and covers every interruption point (including one before
+// classifyFixPipeline reports which pipeline owns a ticket, if any — self-planning
+// fix pipeline or none. It is the gate behind every planning-or-fix dispatch
+// (launchPlanningOrFix, reached from isPlanningRetry, reopenResolved,
+// launchForwardStage's BoardPlanning case and launchDecidedStage's BoardPlanning
+// case) as well as the implementation plan gate (isBuildRetry,
+// resumeFixInsteadOfPlanning, launchDecidedStage's BoardImplementation case), so
+// it answers for a ticket's FIRST launch onto Planning exactly as it does for a
+// recovery relaunch of Implementation — "in planning/implementation, therefore a
+// feature" is the same wrong assumption at every site (SC-5793). The ticket kind
+// is authoritative and covers every interruption point (including one before
 // triage posted its verdict): IsSecurity → security-fix, else IsBug → autofix.
 // With no Getter (or a fetch blip), it falls back to the marker heuristic — a
 // recorded [human:bug-verdict] with no [human:plan] is a bug pipeline
