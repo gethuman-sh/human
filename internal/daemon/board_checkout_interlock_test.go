@@ -208,6 +208,28 @@ func TestRunDoneStage_AbandonedQueuedDeploySaysWhyAndRestoresTheCard(t *testing.
 	assert.NotEmpty(t, card.DeployQueueAbandoned, "the card must say why it came back")
 }
 
+// A queued deploy is neither a round of the pre-merge loop nor an agent to
+// join against: the wait runs in-process in the daemon under no container at
+// all. A thread carrying an EARLIER loop round (both halves) proves the
+// history does not leak through once a fresh queued record is the newest
+// done-stage marker (SC-5878).
+func TestRunDoneStage_QueuedDeployNamesNoRoundAndNoAgent(t *testing.T) {
+	base := time.Unix(1, 0)
+	thread := append(reviewStartedComments(1, "https://example/pr/7", 7, "autofix/sc-1"),
+		cmt(prFixStartedBody("", ""), base.Add(10*time.Minute)),
+		cmt(composedDeployQueuedBody("board-SC-1-implementation"), base.Add(20*time.Minute)))
+
+	card := DeriveBoardCard(thread, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, BoardDoneStage, card.Stage)
+	assert.Equal(t, BoardRunning, card.State)
+	assert.Equal(t, DeployPhaseQueued, card.DeployPhase)
+	assert.Zero(t, card.PRReviewRound, "a wait is not a round of the loop it precedes")
+	assert.False(t, doneStageLoopActive(thread), "the newest done-stage marker is the queued record, not a loop half")
+	view := BoardViewCard{Key: "SC-1", Stage: string(card.Stage), State: string(card.State), DeployPhase: card.DeployPhase}
+	assert.Nil(t, AgentNamesForCard(view), "the wait runs in-process in the daemon under no agent name")
+}
+
 func TestRunDoneStage_DoneStageAgentsDoNotHoldTheCheckout(t *testing.T) {
 	syncPRReview(t)
 	shortCheckoutWait(t)
