@@ -902,7 +902,14 @@ func failureBody(body string) string {
 // latestStateInStage resolves the stage's state from its newest marker and
 // returns that marker's comment so a failure message can be extracted.
 func latestStateInStage(comments []tracker.Comment, stage BoardStage) (BoardState, tracker.Comment) {
-	latest, ok := latestCommentInStage(comments, stage)
+	// A withdrawn queued deploy must not read back as the newest done-stage
+	// marker for any caller of this function — not only the one derivation
+	// pass that already retires it up front (SC-5878). Retiring again here
+	// is idempotent (already-retracted callers pass a comment list with
+	// nothing left to drop) and is what keeps deployRedriveEligible and
+	// stageAlreadyFailed from mistaking a stale [human:deploy-queued] for
+	// the current state of the done stage forever after an abandonment.
+	latest, ok := latestCommentInStage(retireAbandonedQueuedDeploys(comments), stage)
 	if !ok {
 		return BoardIdle, tracker.Comment{}
 	}

@@ -374,3 +374,45 @@ func TestPullRequestShippable_noChecksIsUnknown(t *testing.T) {
 func TestPullRequestShippable_nilState(t *testing.T) {
 	assert.False(t, PullRequestShippable(nil))
 }
+
+// TestZZ_ShippableRedrive_AfterAnAbandonedQueue is SC-5878's own scenario
+// (deploy fails, a person re-drops on Deploy, the checkout is still held, the
+// queue is abandoned at the bound) applied to the re-drive route the plan set
+// out to cover. retireAbandonedQueuedDeploys was applied only inside
+// DeriveBoardCard, so the raw comment list deployRedriveEligible reads still
+// carried [human:deploy-queued] as its newest done-stage marker forever after
+// the withdrawal — BoardRunning, not BoardFailed — and stageAlreadyFailed
+// (the eligibility gate) returned false. A red, shippable deploy must still be
+// re-driven after an abandoned queue exactly as it would with no queue at all.
+func TestZZ_ShippableRedrive_AfterAnAbandonedQueue(t *testing.T) {
+	resetRedriveBackoff(t)
+	base := time.Now().Add(-time.Hour)
+	thread := sc3508Thread(base)
+	thread = append(thread,
+		cmt(composedDeployQueuedBody("board-SC-1-implementation"), base.Add(30*time.Minute)),
+		cmt(composedDeployQueueAbandonedBody("the ticket's own container never released the checkout", "", "10m"),
+			base.Add(40*time.Minute)),
+	)
+	var redriven []string
+	deps := shippableDeps(true, nil, &redriven)
+
+	n := reconcileShippedFailures(context.Background(), ownWork(cardWithThread(thread)), deps, time.Now())
+
+	assert.Equal(t, 1, n, "a red, shippable deploy must still be re-driven after an abandoned queue")
+	assert.Equal(t, []string{"SC-1"}, redriven)
+}
+
+// The same thread with the queued/abandoned pair stripped is the control:
+// it must re-drive too, so the assertion above is about the queue/abandon
+// pair specifically and not some other regression in the shared fixture.
+func TestZZ_ShippableRedrive_WithoutTheAbandonedQueue_ControlStillRedrives(t *testing.T) {
+	resetRedriveBackoff(t)
+	thread := sc3508Thread(time.Now().Add(-time.Hour))
+	var redriven []string
+	deps := shippableDeps(true, nil, &redriven)
+
+	n := reconcileShippedFailures(context.Background(), ownWork(cardWithThread(thread)), deps, time.Now())
+
+	assert.Equal(t, 1, n)
+	assert.Equal(t, []string{"SC-1"}, redriven)
+}
