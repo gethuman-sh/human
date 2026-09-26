@@ -123,6 +123,14 @@ proxy:
     - "*.github.com"
     - "github.com"      # the wildcard above covers subdomains only; git remotes use the apex
     - "*.googleapis.com"
+    # A Go container's bootstrap fetches through these: Go's automatic toolchain
+    # switch downloads from the module proxy and verifies against the checksum
+    # database, so without them an image whose Go is older than go.mod fails
+    # every go invocation (SC-5879). registry.npmjs.org is what `npm install -g`
+    # in the generated postStartCommand needs.
+    - "proxy.golang.org"
+    - "sum.golang.org"
+    - "registry.npmjs.org"
   intercept:  # domains to MITM for traffic logging (requires CA cert trust)
     - "api.anthropic.com"
 

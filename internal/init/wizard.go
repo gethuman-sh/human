@@ -298,7 +298,7 @@ var DefaultProxyDomains = []string{
 // stacks are already chosen in the devcontainer step.
 func StackToLspBinary() map[string]string {
 	return map[string]string{
-		"ghcr.io/devcontainers/features/go:1":     "gopls",
+		goFeatureKey:                              "gopls",
 		"ghcr.io/devcontainers/features/rust:1":   "rust-analyzer",
 		"ghcr.io/devcontainers/features/python:1": "pyright-langserver",
 		"ghcr.io/devcontainers/features/java:1":   "jdtls",
@@ -320,7 +320,7 @@ type StackType struct {
 func StackRegistry() []StackType {
 	return []StackType{
 		{Label: "Node.js 22 (required by Claude Code)", FeatureKey: "ghcr.io/devcontainers/features/node:1", Fixed: true},
-		{Label: "Go", FeatureKey: "ghcr.io/devcontainers/features/go:1"},
+		{Label: "Go", FeatureKey: goFeatureKey},
 		{Label: "Rust", FeatureKey: "ghcr.io/devcontainers/features/rust:1"},
 		{Label: "Python", FeatureKey: "ghcr.io/devcontainers/features/python:1"},
 		{Label: "Java", FeatureKey: "ghcr.io/devcontainers/features/java:1"},

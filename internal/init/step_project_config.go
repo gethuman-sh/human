@@ -53,7 +53,7 @@ func (s *projectConfigStep) Run(w io.Writer, fw claude.FileWriter) ([]string, er
 	}
 
 	if s.state.ProxyEnabled && !hasYAMLKey(content, "proxy") {
-		additions = append(additions, generateProxyYAML(s.state.InterceptEnabled))
+		additions = append(additions, generateProxyYAML(s.state.InterceptEnabled, s.state.SelectedStacks))
 	}
 
 	if len(additions) == 0 {
@@ -99,13 +99,16 @@ func generateVaultYAML(provider, account string) string {
 	return buf.String()
 }
 
-// generateProxyYAML returns the proxy YAML section for .humanconfig.yaml.
-func generateProxyYAML(intercept bool) string {
+// generateProxyYAML returns the proxy YAML section for .humanconfig.yaml. The
+// domains are scoped to the selected stacks: the container's own bootstrap must
+// be able to run, and the allowlist that blocked it was written from a list that
+// knew nothing about the commands the same wizard wrote (SC-5879).
+func generateProxyYAML(intercept bool, stacks []StackType) string {
 	var buf strings.Builder
 	buf.WriteString("proxy:\n")
 	buf.WriteString("  mode: allowlist\n")
 	buf.WriteString("  domains:")
-	for _, d := range DefaultProxyDomains {
+	for _, d := range ProxyDomainsForStacks(stacks) {
 		fmt.Fprintf(&buf, "\n    - %q", d)
 	}
 	if intercept {
