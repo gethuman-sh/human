@@ -13,3 +13,5 @@ Task(subagent_type="human-pr-reviewer", model="opus", prompt="Review PR <number>
 ```
 
 The agent reviews the fixer's **local** branch commit (not the stale pushed head — the fixer never pushes in board context, so origin's head is pre-fix), records its findings and the machine verdict (`approved | changes-requested | unreviewable`) in `stage.pr-review`, and mirrors findings onto the PR as inline comments when it has a write path. The daemon's loop reads that verdict to decide the next step — another fix pass, or the merge — so you do **not** post board markers, dispatch a fixer, or merge anything yourself: run the agent and report its verdict. Human review of the PR happens out of band and never gates this run.
+
+A reviewer that could not reach the substrate records `exit: outage` instead of a verdict: the daemon parks the card on `[human:deploy-outage]` and re-drives the review when it returns, charging no round — so you neither retry it nor report it as a failure.

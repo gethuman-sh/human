@@ -1474,23 +1474,20 @@ func deployFixDispatch(pmKey string, number int, branch string) string {
 	return "/human-deploy-fix " + pmKey + " --pr=" + strconv.Itoa(number) + " --branch=" + branch
 }
 
-// deployFixRounds counts the deploy-fix rounds the budget has actually been
-// charged for: one per deploy-fix-started marker, MINUS every round whose fixer
-// ended in an outage.
-//
-// The refund is not bookkeeping niceness. The budget is spent at DISPATCH — the
-// marker is posted when the fixer launches — and the uncharged outage re-drive
-// re-enters the whole done stage, so it dispatches a fresh fixer and posts a
-// fresh started marker on every reconcile tick. Without this, a substrate that
-// stays down for two ticks spends the entire 2-round budget on rounds that
-// attempted nothing and the card reds anyway: SC-2307's "an outage costs time and
-// nothing else" broken by the counter rather than by the classifier (SC-5592).
+// roundsNetOfOutage counts the rounds a bound has actually been charged for: one
+// per marker with startedHeader, MINUS every round the done stage's outage marker
+// (DeployOutageHeader — the stage has exactly one) followed.
 //
 // Chronological, with a pending flag rather than two independent counts: only an
 // outage that FOLLOWS a started marker refunds that marker's round, so a stray or
 // repeated outage marker can never drive the count below the rounds that really
 // ran. Same started/terminal pairing as lateResultCandidates.
-func deployFixRounds(comments []tracker.Comment) int {
+//
+// Shared by the deploy-fix bound (deployFixRounds) and the review-loop bound
+// (chargedPRReviewRounds) because it is ONE rule — an outage attempted nothing,
+// so it must cost no round (SC-2307/SC-5592/SC-5627) — and two copies would need
+// two coordinated edits to stay true.
+func roundsNetOfOutage(comments []tracker.Comment, startedHeader string) int {
 	sorted := make([]tracker.Comment, len(comments))
 	copy(sorted, comments)
 	sort.SliceStable(sorted, func(i, j int) bool { return commentNewer(sorted[j], sorted[i]) })
@@ -1499,7 +1496,7 @@ func deployFixRounds(comments []tracker.Comment) int {
 	for _, c := range sorted {
 		trimmed := strings.TrimSpace(c.Body)
 		switch {
-		case strings.HasPrefix(trimmed, DeployFixStartedHeader):
+		case strings.HasPrefix(trimmed, startedHeader):
 			n++
 			charged = true
 		case strings.HasPrefix(trimmed, DeployOutageHeader):
@@ -1510,6 +1507,66 @@ func deployFixRounds(comments []tracker.Comment) int {
 		}
 	}
 	return n
+}
+
+// reviewFollowsOutagedFix reports that the newest pr-review-started marker was
+// posted directly after a done-stage outage that interrupted the fix dispatch
+// preceding it — the SC-5627 case where an outage during the fix step parks
+// the card and the uncharged re-drive re-enters the done stage at
+// startPRReview (runDoneStage always re-enters at review), skipping the fix
+// that was actually dispatched. The fixer named on that pr-fix-started marker
+// never ran, so lastFixFinding/lastFixClass still name the finding the
+// reviewer is about to report again — a false repeat, not the reviewer and
+// fixer disagreeing.
+//
+// Chronological with a pending flag, the same walk as roundsNetOfOutage:
+// entering a fix dispatch arms the flag, the NEXT fix dispatch disarms it, and
+// the flag is read off at exactly the newest review-started marker. Only a fix
+// dispatch may disarm it: the outage re-drive can itself be outaged (the
+// reviewer it relaunched never ran either) and posts one more
+// pr-review-started on the next tick, and that reviewer still faces the finding
+// no fixer has addressed. Disarming on review-started read that second re-drive
+// as a genuine round and redded the card one outage deeper than the case this
+// helper exists for. An outage during review is not this case: the fix
+// dispatch it followed already completed, so the finding it compares against
+// is real, and the flag was never armed.
+func reviewFollowsOutagedFix(comments []tracker.Comment) bool {
+	sorted := make([]tracker.Comment, len(comments))
+	copy(sorted, comments)
+	sort.SliceStable(sorted, func(i, j int) bool { return commentNewer(sorted[j], sorted[i]) })
+
+	inFix, outagedFix, result := false, false, false
+	for _, c := range sorted {
+		trimmed := strings.TrimSpace(c.Body)
+		switch {
+		case strings.HasPrefix(trimmed, PRFixStartedHeader):
+			inFix, outagedFix = true, false
+		case strings.HasPrefix(trimmed, PRReviewStartedHeader):
+			result = outagedFix
+			inFix = false
+		case strings.HasPrefix(trimmed, DeployOutageHeader):
+			if inFix {
+				outagedFix = true
+			}
+		}
+	}
+	return result
+}
+
+// deployFixRounds counts the deploy-fix rounds the budget has actually been
+// charged for: one per deploy-fix-started marker, MINUS every round whose fixer
+// ended in an outage.
+//
+// The refund is not bookkeeping niceness. The budget is spent at DISPATCH — the
+// marker is posted when the fixer launches — and the uncharged outage re-drive
+// re-enters the whole done stage, so it dispatches a fresh fixer and posts a
+// fresh started marker on every reconcile tick. Without this, a substrate that
+// stays down for two ticks spends the entire 2-round budget on rounds that
+// attempted nothing and the card reds anyway: SC-2307's "an outage costs time and
+// nothing else" broken by the counter rather than by the classifier (SC-5592) —
+// the walk itself is roundsNetOfOutage, shared with the review loop's bound.
+func deployFixRounds(comments []tracker.Comment) int {
+	return roundsNetOfOutage(comments, DeployFixStartedHeader)
 }
 
 // deployFixGrants counts the re-armed deploy-fix rounds standing UNSPENT on the
@@ -1728,12 +1785,22 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, ou
 	// so comparing it here would always read true and falsely blame a
 	// fix-stage escalation (a crashed fixer, an unclassifiable exit) on a
 	// repeated finding it never re-reviewed (SC-5174).
-	if LatestPRLoopStage(comments) == PRStageReview {
+	// A review whose immediately preceding fix dispatch never ran — parked by an
+	// outage and re-driven straight back into review — has nothing to compare
+	// against: the finding it names is the one that fix was SENT, not one it
+	// addressed and failed to fix. Comparing here would read the outage itself
+	// as the fixer and the reviewer disagreeing (SC-5627).
+	if LatestPRLoopStage(comments) == PRStageReview && !reviewFollowsOutagedFix(comments) {
 		byIdentity := findingRepeated(comments, outcome.ReviewFinding)
 		byClass := classRepeated(comments, outcome.ReviewClass)
 		outcome.FindingRepeated = byIdentity || byClass
 		outcome.ClassRepeated = byClass && !byIdentity
 	}
+	//exhaustive:enforce
+	// Every member is listed on purpose and the linter enforces it: an action
+	// falling silently into the default is how SC-5592's ExitOutage shipped
+	// unhandled, and PRActionOutage joining this set is exactly that shape again.
+	// The `default` stays as a runtime guard.
 	switch EvaluatePRLoop(comments, outcome) {
 	case PRActionReview:
 		_, err := d.launchPRReview(ctx, pmKey, PRResult{Number: number, URL: url}, branch)
@@ -1743,35 +1810,71 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, ou
 			prFixDispatch(pmKey, number, branch), prFixStartedBody(outcome.ReviewFinding, outcome.ReviewClass))
 		return err
 	case PRActionMerge:
-		// Record the loop converging BEFORE acting on it. Both launches and the
-		// escalation already post a marker, so without this the one outcome the
-		// thread never recorded was success — and it is the outcome a reader most
-		// needs, because it is what separates "the review passed, the merge is
-		// running" from "the review is still going". Posting it also retires the
-		// loop sub-phase, so the badge stops saying "PR review…" for the whole of
-		// the CI gate, rebase and merge that follow. A failure to post is not
-		// fatal: the merge is the work, and refusing to ship over a missing
-		// comment would trade a lost sentence for lost code.
-		if _, err := d.Commenter.AddComment(ctx, pmKey, prReviewPassedBody(branch, outcome.ReviewHead)); err != nil {
-			d.Logger.Warn().Err(err).Str("pm", pmKey).
-				Msg("board PR loop: could not record the passing review; continuing to the merge")
-		}
-		// A branch already on the base has no draft left to release: the forge
-		// refuses to un-draft a merged pull request, and reporting that refusal
-		// as a deploy failure reds a card whose work shipped. The engine's own
-		// already-merged carve-out records the outcome instead.
-		if !d.Deployer.BranchMerged(ctx, d.WorkspaceDir, branch) {
-			if err := d.Deployer.MarkReadyForReview(ctx, d.WorkspaceDir, number); err != nil {
-				return d.deployFailed(pmKey, url, deployReason(
-					"the reviewed PR could not be marked ready for merge — open the PR and mark it ready, then re-run Deploy", err))
-			}
-		}
-		// Reuse the untouched deploy engine: it adopts the now-ready open PR
-		// (forge.AdoptOrCreatePullRequest), runs the CI gate, freshness rebase and merge.
-		return d.DeployBranch(ctx, pmKey, pmKey, doneBody(pmKey, card, branch), branch)
-	default: // PRActionEscalate
+		return d.mergeReviewedBranch(ctx, pmKey, card, comments, number, url, branch, outcome.ReviewHead)
+	case PRActionOutage:
+		return d.prLoopOutage(ctx, pmKey, comments, outcome)
+	case PRActionEscalate:
+		return d.escalatePRLoop(ctx, pmKey, comments, outcome)
+	default:
 		return d.escalatePRLoop(ctx, pmKey, comments, outcome)
 	}
+}
+
+// mergeReviewedBranch runs the approved review's merge: record the pass, release
+// the draft, and hand the branch to the untouched deploy engine.
+//
+// Its own method rather than a switch arm so AdvancePRLoop's action switch can
+// list every PRLoopAction member — which the gocyclo bound would otherwise
+// refuse — and so the arm's three failure modes read as one subject.
+func (d BoardTransitionDeps) mergeReviewedBranch(ctx context.Context, pmKey string, card BoardCard,
+	comments []tracker.Comment, number int, url, branch, reviewHead string) error {
+	// Record the loop converging BEFORE acting on it. Both launches and the
+	// escalation already post a marker, so without this the one outcome the
+	// thread never recorded was success — and it is the outcome a reader most
+	// needs, because it is what separates "the review passed, the merge is
+	// running" from "the review is still going". Posting it also retires the
+	// loop sub-phase, so the badge stops saying "PR review…" for the whole of
+	// the CI gate, rebase and merge that follow. A failure to post is not
+	// fatal: the merge is the work, and refusing to ship over a missing
+	// comment would trade a lost sentence for lost code.
+	if _, err := d.Commenter.AddComment(ctx, pmKey, prReviewPassedBody(branch, reviewHead)); err != nil {
+		d.Logger.Warn().Err(err).Str("pm", pmKey).
+			Msg("board PR loop: could not record the passing review; continuing to the merge")
+	}
+	// A branch already on the base has no draft left to release: the forge
+	// refuses to un-draft a merged pull request, and reporting that refusal
+	// as a deploy failure reds a card whose work shipped. The engine's own
+	// already-merged carve-out records the outcome instead.
+	if !d.Deployer.BranchMerged(ctx, d.WorkspaceDir, branch) {
+		if err := d.Deployer.MarkReadyForReview(ctx, d.WorkspaceDir, number); err != nil {
+			return d.deployFailed(pmKey, url, deployReason(
+				"the reviewed PR could not be marked ready for merge — open the PR and mark it ready, then re-run Deploy", err))
+		}
+	}
+	// Reuse the untouched deploy engine: it adopts the now-ready open PR
+	// (forge.AdoptOrCreatePullRequest), runs the CI gate, freshness rebase and merge.
+	return d.DeployBranch(ctx, pmKey, pmKey, doneBody(pmKey, card, branch), branch)
+}
+
+// prLoopOutage parks the card for a loop step that reported the substrate was
+// unreachable. It posts the DONE stage's outage marker — the loop has no marker
+// of its own and needs none: the card reads paused, reconcileOutage re-drives it
+// uncharged (isDeployRetry accepts an outage card), and a wait past
+// OutageWaitBound is handed to a person (SC-2307/SC-2851).
+//
+// A done stage some other actor already redded stays red: flipping it back to
+// "waiting" would re-drive the deploy underneath the person who now owns it
+// (SC-5592's rule for the deploy fixer, applied at the second site). The test is
+// the derived state rather than stageAlreadyFailed, because the done stage has
+// TWO failed markers and failedHeaderFor knows only deploy-failed — the loop's
+// own red is [human:pr-review-failed].
+func (d BoardTransitionDeps) prLoopOutage(ctx context.Context, pmKey string, comments []tracker.Comment, outcome PRLoopOutcome) error {
+	if state, _ := latestStateInStage(comments, BoardDoneStage); state == BoardFailed {
+		d.Logger.Info().Str("pm", pmKey).
+			Msg("board PR loop: the done stage is already red for a person; not flipping it back to waiting")
+		return nil
+	}
+	return d.doneStageOutage(ctx, pmKey, comments, outcome.outageReason(LatestPRLoopStage(comments)))
 }
 
 // loopStepStillRunning is the re-drive's liveness check. Only a drive with no
@@ -1859,7 +1962,9 @@ func (d BoardTransitionDeps) escalatePRLoop(ctx context.Context, pmKey string, c
 		case len(opts) >= marker.MinDecisionOptions:
 			m, order := optionsMarker(BoardImplementation, decisionContext(outcome), opts)
 			return postMarker(ctx, d.Commenter, pmKey, m, order...)
-		case len(opts) == 1 && prReviewRounds(comments) < MaxSoleDirectionPursuits:
+		// The charged count, like the loop's own bound: a pursuit an outage
+		// interrupted was not a pursuit (SC-5627).
+		case len(opts) == 1 && chargedPRReviewRounds(comments) < MaxSoleDirectionPursuits:
 			return d.pursueSoleDirection(ctx, pmKey, comments, opts[0])
 		}
 		// No directions — or one the round budget can no longer afford to
@@ -2138,7 +2243,7 @@ func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string,
 
 // deployFixUnreachable decides WHICH kind of unreachable the fixer met.
 //
-// A substrate that is down is a wait (deployFixOutage, SC-5592). A host this
+// A substrate that is down is a wait (doneStageOutage, SC-5592). A host this
 // daemon's own proxy refused by policy is not: the fixer saw the same bare EOF
 // and reported the same exit, but nothing comes back until a person edits
 // proxy.domains — so the card reds once naming the host and the line to add,
@@ -2152,7 +2257,7 @@ func (d BoardTransitionDeps) deployFixUnreachable(ctx context.Context, pmKey str
 			return nil
 		}
 	}
-	return d.deployFixOutage(ctx, pmKey, comments, summary)
+	return d.doneStageOutage(ctx, pmKey, comments, summary)
 }
 
 // egressBlock asks the probe, nil-safe.
@@ -2163,17 +2268,19 @@ func (d BoardTransitionDeps) egressBlock(pmKey string) (EgressBlock, bool) {
 	return d.EgressBlocked(pmKey)
 }
 
-// deployFixOutage posts the done stage's outage marker for a fixer that reported
-// the substrate was unreachable, and says it once: an identical standing marker is
-// left in place rather than re-dated, which is both what keeps the ticket from
-// collecting one per tick and what makes the wait measurable (outageRunSince,
-// SC-2851). summary is the fixer's own line, so the card names what was
-// unreachable instead of the generic fallback.
+// doneStageOutage posts the done stage's outage marker for a step that reported
+// the substrate was unreachable — the deploy fixer, or either half of the PR
+// review→fix loop — and says it once: an identical standing marker is left in
+// place rather than re-dated, which is both what keeps the ticket from collecting
+// one per tick and what makes the wait measurable (outageRunSince, SC-2851).
+// summary is the step's own line, so the card names what was unreachable instead
+// of the generic fallback.
 //
-// Reached only for an outage this host cannot explain; a policy-refused host is
-// split off by deployFixUnreachable first.
-func (d BoardTransitionDeps) deployFixOutage(ctx context.Context, pmKey string, comments []tracker.Comment, summary string) error {
-	// The fixer's summary is agent-authored free text and the template's "one
+// Reached for the PR reviewer, the PR fixer and the deploy fixer alike, for an
+// outage this host cannot explain; a deploy fixer's policy-refused host is split
+// off by deployFixUnreachable first.
+func (d BoardTransitionDeps) doneStageOutage(ctx context.Context, pmKey string, comments []tracker.Comment, summary string) error {
+	// The agent's summary is agent-authored free text and the template's "one
 	// line" is not enforced: collapsed to a single line (not just the first)
 	// so a multi-line summary neither duplicates itself into the composed
 	// sentence nor lets a "resume:" line ride along and get scanned by
@@ -2182,11 +2289,11 @@ func (d BoardTransitionDeps) deployFixOutage(ctx context.Context, pmKey string, 
 	body := markerBody(pausedOutageMarker(outageTypeFor(BoardDoneStage), nil, "", "", reason))
 	if outageAlreadyStated(comments, BoardDoneStage, body) {
 		d.Logger.Info().Str("pm", pmKey).
-			Msg("board deploy fix: the card already says the substrate is down, not repeating it")
+			Msg("board done stage: the card already says the substrate is down, not repeating it")
 		return nil
 	}
 	if _, err := d.Commenter.AddComment(ctx, pmKey, body); err != nil {
-		return errors.WrapWithDetails(err, "posting the deploy-fix outage marker", "pm", pmKey)
+		return errors.WrapWithDetails(err, "posting the done-stage outage marker", "pm", pmKey)
 	}
 	return nil
 }

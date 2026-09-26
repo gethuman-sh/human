@@ -791,9 +791,37 @@ func drivePRLoopExit(exit RunExit, deps FailureDeps) bool {
 }
 
 // driveDeployFixExit routes a deploy-fixer's exit to AdvanceDeployFix, reclaiming
-// its worktree first (the fixer already pushed its work). It reports whether the
-// exit was the deploy-fix stage and thus fully handled here. A non-deployfix stage
-// returns false so the caller falls through to the PR-loop / stage-failure handling.
+// its worktree first. It reports whether the exit was the deploy-fix stage and
+// thus fully handled here. A non-deployfix stage returns false so the caller falls
+// through to the PR-loop / stage-failure handling.
+//
+// A SUBSTRATE FAILURE IS NOT AN EXIT — the same rule as drivePRLoopExit's, and
+// this driver never had it (SC-5627). The hook fires StopFailure on a model API
+// error and Claude Code retries through it, so the run carries on. Driving on that
+// event fires AdvanceDeployFix, which reads a report the fixer has not written
+// yet — Exit "" — and reds the card (board_transition.go deployFixEscalationReason)
+// while the fixer is still rebasing: SC-4026's measured failure at the second site.
+// Liveness cannot decide it (the hook runs inside the claude process), so the error
+// type is the fact available, and classifyErrorType already reads it.
+//
+// The worktree handoff stays INSIDE the real-exit branch for the reason it does
+// there: the fixer's deliverable is an unpushed local branch the daemon publishes
+// at AdvanceDeployFix (PublishResolvedBranch), so waiving the protection on an
+// error the run then recovers from is how that resolution would be lost.
+//
+// A fixer that genuinely dies here is not silently lost, but it is not a free
+// retry either: reconcilePRLoops re-drives only a card whose newest done-stage
+// marker is pr-review-started or pr-fix-started (doneStageLoopActive ->
+// doneStageLoopHalf, board_reconcile.go:392-411, gated at :601) — once
+// deploy-fix-started is the newest marker no reconcile pass calls
+// AdvanceDeployFix (its only call sites are :831 below and
+// cmd/cmddaemon/daemon.go's live exit path). SC-5591's three-name join
+// (liveStageAgent) is a stand-down guard against double-dispatch, not an
+// ownership claim over deploy-fix cards; the FSM doc's deploy-fixing.note says
+// the same. The actual recovery is reconcileStuckRunning: after
+// StuckRunningGrace it posts [human:deploy-failed] and charges the stage's
+// retry budget (stuckCardIsOursToRed/stuckCardLivenessVerdict) — a delayed,
+// CHARGED red, not an uncharged re-drive.
 func driveDeployFixExit(exit RunExit, deps FailureDeps) bool {
 	if exit.Stage != deployFixAgentStage {
 		return false
@@ -802,6 +830,12 @@ func driveDeployFixExit(exit RunExit, deps FailureDeps) bool {
 	// authentication is a dead login, not a failed fix (SC-5108).
 	kind, reason := classifyErrorType(exit.ErrorType)
 	deps.noteAuthRefusal(exit.PMKey, kind, reason)
+	if kind == endingPaused {
+		deps.Logger.Info().Str("pm", exit.PMKey).Str("stage", string(exit.Stage)).Str("agent", exit.AgentName).
+			Str("reason", reason).
+			Msg("board deploy fix: substrate failure mid-run, not treating it as the fixer's exit")
+		return true
+	}
 	deps.handoff(exit.AgentName)
 	if deps.AdvanceDeployFix != nil {
 		if err := deps.AdvanceDeployFix(exit.PMKey); err != nil {

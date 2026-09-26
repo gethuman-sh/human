@@ -43,7 +43,7 @@ func TestReadPRReviewVerdict_readsField(t *testing.T) {
 	isolateState(t)
 	writeRawReport(t, "SC-1", "stage.pr-review", `{"verdict":"approved","blocking":0,"head":"abc123","summary":"clean"}`)
 
-	verdict, head, _, recorded, fresh := readPRReviewVerdict(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
+	verdict, head, _, _, _, recorded, fresh := readPRReviewVerdict(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
 	assert.Equal(t, "approved", verdict)
 	assert.Equal(t, "abc123", head, "the reviewed head feeds the convergence guard")
 	assert.True(t, recorded)
@@ -54,11 +54,38 @@ func TestReadPRReviewVerdict_readsField(t *testing.T) {
 func TestReadPRReviewVerdict_missingIsEmpty(t *testing.T) {
 	isolateState(t)
 	shrinkPRLoopReadBackoff(t)
-	verdict, head, _, recorded, fresh := readPRReviewVerdict(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
+	verdict, head, _, _, _, recorded, fresh := readPRReviewVerdict(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
 	assert.Equal(t, "", verdict)
 	assert.Equal(t, "", head)
 	assert.False(t, recorded, "absence must be distinguishable from an empty verdict")
 	assert.False(t, fresh)
+}
+
+// A reviewer that could not reach the substrate records the exit contract's
+// outage and no verdict at all. Reading only the verdict made that an empty
+// verdict, which the loop escalates on (SC-5627).
+func TestReadPRReviewVerdict_readsTheOutageExitAndSummary(t *testing.T) {
+	isolateState(t)
+	writeRawReport(t, "SC-1", "stage.pr-review", `{"exit":"outage","summary":"the tracker API was unreachable"}`)
+
+	verdict, _, _, exit, summary, recorded, fresh := readPRReviewVerdict(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
+	assert.Empty(t, verdict, "an outage records no verdict")
+	assert.Equal(t, string(daemon.ExitOutage), exit)
+	assert.Equal(t, "the tracker API was unreachable", summary, "the card's face names what was unreachable")
+	assert.True(t, recorded)
+	assert.True(t, fresh)
+}
+
+// deferred is the findings note the options block leads with; an outage deferred
+// nothing, so the line the card needs is the summary (SC-5627).
+func TestReadPRFixReport_outageLineIsTheSummaryNotTheDeferred(t *testing.T) {
+	isolateState(t)
+	writeRawReport(t, "SC-1", "stage.pr-fix",
+		`{"exit":"outage","deferred":"nothing addressed","summary":"the model API was unreachable"}`)
+
+	exit, _, summary, _, _, _ := readPRFixReport(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
+	assert.Equal(t, string(daemon.ExitOutage), exit)
+	assert.Equal(t, "the model API was unreachable", summary)
 }
 
 func TestReadPRFixReport_readsField(t *testing.T) {
@@ -127,7 +154,7 @@ func TestReadPRReviewVerdict_waitsForFreshVerdict(t *testing.T) {
 		close(written)
 	}()
 
-	verdict, head, _, recorded, fresh := readPRReviewVerdict(context.Background(), "", "SC-1", anchor, zerolog.Nop())
+	verdict, head, _, _, _, recorded, fresh := readPRReviewVerdict(context.Background(), "", "SC-1", anchor, zerolog.Nop())
 	<-written
 
 	assert.True(t, recorded, "the settle backoff must pick up the delayed write")
@@ -146,7 +173,7 @@ func TestReadPRReviewVerdict_staleOnly_notFresh(t *testing.T) {
 	writeRawReport(t, "SC-1", "stage.pr-review", `{"verdict":"changes-requested","head":"abc123"}`)
 	anchor := time.Now().Add(time.Hour) // anchor is "in the future" relative to the write above
 
-	verdict, _, _, recorded, fresh := readPRReviewVerdict(context.Background(), "", "SC-1", anchor, zerolog.Nop())
+	verdict, _, _, _, _, recorded, fresh := readPRReviewVerdict(context.Background(), "", "SC-1", anchor, zerolog.Nop())
 
 	assert.True(t, recorded, "a stale record was still found")
 	assert.False(t, fresh, "a record older than the round's own anchor is never fresh")

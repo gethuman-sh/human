@@ -150,7 +150,7 @@ type BoardCard struct {
 	// The two loop halves alternate their badge word, so a card at round one and
 	// a card at round seven read identically: alternating labels can show motion,
 	// only the round can show the motion is circular. The number is not new —
-	// prReviewRounds is the counter the loop's own outer bound reads — it has
+	// chargedPRReviewRounds is the counter the loop's own outer bound reads — it has
 	// simply never left the daemon.
 	PRReviewRound    int `json:"pr_review_round,omitempty"`
 	PRReviewRoundCap int `json:"pr_review_round_cap,omitempty"`
@@ -690,12 +690,14 @@ func deployPhaseFor(card BoardCard, comments []tracker.Comment) string {
 // The count is thread-wide rather than scoped to this attempt, because that is
 // the number EvaluatePRLoop itself acts on against the same bound: a board that
 // disagreed with the loop's own escalation arithmetic would be worse than one
-// that agrees with it.
+// that agrees with it. That number gives back a round an outage interrupted
+// (chargedPRReviewRounds), so the badge counts the rounds that actually ran —
+// the same rounds the bound is spent on (SC-5627).
 func prLoopRoundFor(card BoardCard, comments []tracker.Comment) (round, bound int) {
 	if card.Stage != BoardDoneStage || card.State != BoardRunning || card.DeployPhase == "" {
 		return 0, 0
 	}
-	n := prReviewRounds(comments)
+	n := chargedPRReviewRounds(comments)
 	if n <= 0 {
 		return 0, 0
 	}
