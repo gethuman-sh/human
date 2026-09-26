@@ -268,6 +268,25 @@ func TestReadDeployFixReport_undecodableFreshRecordIsNotUnconfirmed(t *testing.T
 	assert.False(t, report.Unconfirmed, "this round's own write, undecodable, is a step that reported — not a dead one")
 }
 
+// SC-5554 review note 1: json.Unmarshal does not stop at the first type
+// error — it keeps decoding the fields that follow and returns the error only
+// once the whole object is consumed. "exit" appears before "blocker" in this
+// record, so it decodes to "done" before "blocker" (a string, not the object
+// Blocker.UnmarshalJSON expects) fails. A reader that passed that half-decoded
+// Exit through would hand AdvanceDeployFix's done arm a record the daemon
+// never actually confirmed, which would publish the branch and re-run the
+// deploy on it. The reader must zero every field of an undecodable record
+// instead, so it falls through to the generic red exactly like any other
+// recorded-but-unusable exit (TestReadDeployFixReport_undecodableFreshRecordIsNotUnconfirmed).
+func TestReadDeployFixReport_undecodableRecordExposesNoHalfDecodedExit(t *testing.T) {
+	isolateState(t)
+	writeRawReport(t, "SC-1", "stage.deploy-fix", `{"exit":"done","blocker":"oops"}`)
+
+	report := readDeployFixReport(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
+	assert.Empty(t, report.Exit, "an undecodable record must not hand a half-decoded exit through")
+	assert.False(t, report.Unconfirmed, "this round's own write, undecodable, is a step that reported — not a dead one")
+}
+
 // ctx cancellation mid-backoff must return promptly rather than block for the
 // full retry budget.
 func TestReadPRReviewVerdict_ctxCancelled_returnsPromptly(t *testing.T) {

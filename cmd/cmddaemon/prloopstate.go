@@ -130,6 +130,19 @@ func readDeployFixReport(ctx context.Context, project, pmKey string, notBefore t
 	// nothing, and the driver re-runs it rather than redding (SC-5554). A record
 	// that IS this round's and would not decode is NOT unconfirmed — that fixer
 	// reported — so it falls through to the red.
+	//
+	// An unreadable record must not hand any of its fields through: json.Unmarshal
+	// keeps decoding after a type error and only returns it once the object is
+	// exhausted, so v may hold a real value for a field that appeared before the
+	// rejected one (e.g. "exit":"done" decoded fine, "blocker":"oops" then failed
+	// to decode into Blocker). Passed through as-is, that exit reaches
+	// AdvanceDeployFix's ExitDone arm and publishes the branch on a record the
+	// daemon could not actually read — zero it here instead, so the undecodable
+	// record falls through to the generic red the doc comment above promises
+	// (SC-5554 review note 1).
+	if read.unreadable {
+		v.Exit, v.Blocker, v.Summary = "", daemon.Blocker{}, ""
+	}
 	return daemon.DeployFixReport{
 		Exit:        daemon.StageExit(v.Exit),
 		Unconfirmed: !read.fresh && !read.unreadable,
@@ -151,8 +164,15 @@ type stageRead struct {
 	// fresh: the record found was confirmed to be this round's write AND decoded
 	// into out. Only then may out be read.
 	fresh bool
-	// unreadable: it was this round's write and json.Unmarshal rejected it. out
-	// may hold half a record — decoding stops at the error — so it is never read.
+	// unreadable: it was this round's write and json.Unmarshal rejected it.
+	// json.Unmarshal does not stop at the first type error — it keeps decoding
+	// the fields that follow and returns the first error only once the whole
+	// object is consumed — so out may hold a PARTIALLY decoded record: fields
+	// that appeared before the rejected one in the JSON are populated same as a
+	// clean decode, the rejected field and everything after it are left zero.
+	// A caller must never read out on an unreadable result; readDeployFixReport
+	// is the one place that used to (SC-5554 review note 1) and now zeroes the
+	// fields it exposes rather than trust a partial decode.
 	unreadable bool
 }
 
