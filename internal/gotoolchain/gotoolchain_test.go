@@ -20,11 +20,19 @@ func TestGoDirective_absent(t *testing.T) {
 	require.Equal(t, "", GoDirective([]byte("module x\n")))
 }
 
-func TestGoDirective_ignoresACommentedDirective(t *testing.T) {
-	// "go 1.26.6 // comment" splits into 4 fields, not the 2 GoDirective
-	// requires, so it no-ops rather than misreading a directive that isn't
-	// there in the shape expected.
-	require.Equal(t, "", GoDirective([]byte("module x\n\ngo 1.26.6 // comment\n")))
+func TestGoDirective_stripsATrailingComment(t *testing.T) {
+	// A commented directive is still a directive — go.mod is free to
+	// annotate it, and reading "" here would silently disable both the
+	// wizard's pin and the container-start check for a project that does
+	// this (SC-5879 review).
+	require.Equal(t, "1.26.6", GoDirective([]byte("module x\n\ngo 1.26.6 // pinned by SC-5879\n")))
+}
+
+func TestGoDirective_aWhollyMalformedLineIsIgnored(t *testing.T) {
+	// Not every line starting with "go" is the directive — e.g. a stray
+	// "go build" left in go.mod by hand-editing. Only the exact `go <ver>`
+	// shape (after stripping any comment) is read.
+	require.Equal(t, "", GoDirective([]byte("module x\n\ngo build ./...\n")))
 }
 
 func TestRequirement_noGoMod(t *testing.T) {
@@ -42,6 +50,19 @@ func TestRequirement_readsGoMod(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, "1.26.6", v)
+}
+
+// A go.mod that exists but names no readable directive is a different fault
+// than no go.mod at all — the caller must be able to tell "nothing here" from
+// "something's wrong with what's here" rather than reporting both as "no
+// go.mod in <dir>" (SC-5879 review).
+func TestRequirement_noDirective(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n\ngo build ./...\n"), 0o600))
+	v, ok, err := Requirement(dir)
+	require.ErrorIs(t, err, ErrNoDirective)
+	require.False(t, ok)
+	require.Equal(t, "", v)
 }
 
 func TestCheck_satisfied(t *testing.T) {

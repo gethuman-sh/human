@@ -21,11 +21,26 @@ import (
 // a check that refuses on evidence it does not have starts lying.
 var ErrUndecidable = errors.WithDetails("go version comparison is undecidable")
 
+// ErrNoDirective means go.mod exists but this function found no `go`
+// directive it could read — different from no go.mod at all: the file is
+// there, something about reading its directive is wrong (a stray trailing
+// comment survives this parse; only a wholly malformed line reaches here).
+// Distinguishing the two matters because the caller's message otherwise says
+// "no go.mod in <dir>" about a directory that has one (SC-5879 review).
+var ErrNoDirective = errors.WithDetails("go.mod names no readable `go` directive")
+
 // GoDirective returns the version named by go.mod's `go` directive ("1.26.6"),
 // or "" when there is none. Only the directive line is read: `toolchain go1.x`
-// and the require block name versions that are not the project's own floor.
+// and the require block name versions that are not the project's own floor. A
+// trailing `//` comment is stripped before splitting fields, so
+// `go 1.26.6 // pinned` still yields "1.26.6" rather than silently disabling
+// the pin — a go.mod is free to comment its directive and this must not treat
+// that as absence.
 func GoDirective(gomod []byte) string {
 	for _, line := range strings.Split(string(gomod), "\n") {
+		if idx := strings.Index(line, "//"); idx >= 0 {
+			line = line[:idx]
+		}
 		fields := strings.Fields(line)
 		if len(fields) == 2 && fields[0] == "go" {
 			return fields[1]
@@ -35,7 +50,10 @@ func GoDirective(gomod []byte) string {
 }
 
 // Requirement reads the version dir/go.mod requires. ok is false when dir holds
-// no go.mod — not every project is a Go project, and that is not a fault.
+// no go.mod — not every project is a Go project, and that is not a fault. A
+// go.mod that exists but names no readable directive is reported as
+// ErrNoDirective rather than folded into the same "no go.mod" case, which
+// would misname the fault (SC-5879 review).
 func Requirement(dir string) (version string, ok bool, err error) {
 	path := filepath.Join(dir, "go.mod")
 	data, readErr := os.ReadFile(path) // #nosec G304 -- path is <dir>/go.mod
@@ -47,7 +65,7 @@ func Requirement(dir string) (version string, ok bool, err error) {
 	}
 	v := GoDirective(data)
 	if v == "" {
-		return "", false, nil
+		return "", false, ErrNoDirective
 	}
 	return v, true, nil
 }

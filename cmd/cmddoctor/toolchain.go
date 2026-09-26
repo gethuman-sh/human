@@ -41,10 +41,17 @@ const checkName = "go toolchain"
 // check that reds a container it cannot judge would be worse than the bug.
 func runToolchainCheck(out io.Writer, dir string, prober gotoolchain.Prober) error {
 	required, ok, err := gotoolchain.Requirement(dir)
-	if err != nil {
+	switch {
+	case errors.Is(err, gotoolchain.ErrNoDirective):
+		// go.mod exists — distinct from the no-go.mod case below, which is
+		// not a fault at all. This one leaves a project's pin and container
+		// check both silently disabled, so it is said explicitly rather than
+		// read as "no go.mod in <dir>" about a directory that has one.
+		pass(out, "go.mod in "+dir+" names no readable `go` directive — nothing to check")
+		return nil
+	case err != nil:
 		return err
-	}
-	if !ok {
+	case !ok:
 		pass(out, "no go.mod in "+dir+" — nothing to check")
 		return nil
 	}

@@ -69,6 +69,23 @@ func TestRunToolchainCheck_noGoMod(t *testing.T) {
 	require.Contains(t, buf.String(), "nothing to check")
 }
 
+// A go.mod that exists but names no readable `go` directive is a different
+// fault than no go.mod at all, and must say so — not "no go.mod in <dir>"
+// about a directory that has one (SC-5879 review).
+func TestRunToolchainCheck_goModWithoutDirective(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n\ngo build ./...\n"), 0o600))
+	var buf bytes.Buffer
+
+	err := runToolchainCheck(&buf, dir, stubProber{version: "1.26.6"})
+
+	require.NoError(t, err)
+	out := buf.String()
+	require.Contains(t, out, "nothing to check")
+	require.NotContains(t, out, "no go.mod in "+dir,
+		"go.mod exists here; the message must not claim it does not")
+}
+
 func TestRunToolchainCheck_proberFails(t *testing.T) {
 	dir := t.TempDir()
 	writeGoMod(t, dir, "1.26.6")
