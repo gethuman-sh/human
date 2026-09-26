@@ -2330,34 +2330,17 @@ func TestAdvanceDeployFix_UnrecordedExit_Reds(t *testing.T) {
 	assert.Contains(t, failed, "stopped without recovering the deploy")
 }
 
-// SC-5554 review note 1: an undecodable stage.deploy-fix record (this round's
-// own write, but a field after "exit" fails to decode) must never reach this
-// arm carrying the exit it half-decoded — readDeployFixReport zeroes every
-// field it exposes on such a record, so AdvanceDeployFix sees exactly the same
-// report a genuinely unrecorded-but-reported exit produces (Exit "",
-// Unconfirmed false) and takes the same red path rather than the done arm's
-// publish-and-redeploy. Pinned here as the DONE arm's own contract, since
+// SC-5554 review note 1 / verify-gap 2: an undecodable stage.deploy-fix
+// record must never reach this arm carrying the exit it half-decoded.
 // AdvanceDeployFix trusts DeployFixReport.Exit completely and has no
-// unreadable flag of its own to gate on — the reader is the only place that
-// can refuse to pass a half-decoded value through.
-func TestAdvanceDeployFix_UndecodableRecordNeverReachesTheDoneArm(t *testing.T) {
-	c := &fakeCommenter{comments: deployFixReadyComments()}
-	p := &fakeDeployer{}
-	deps := newDeps(c, &fakeLauncher{}, p)
-	// What readDeployFixReport now returns for {"exit":"done","blocker":"oops"}.
-	err := deps.AdvanceDeployFix(context.Background(), "SC-1", DeployFixReport{})
-	require.NoError(t, err)
-	assert.Zero(t, p.publishCalls, "an undecodable record must never publish the branch")
-	assert.Zero(t, p.merged)
-
-	var failed string
-	for _, b := range c.added {
-		if strings.HasPrefix(b, DeployFailedHeader) {
-			failed = b
-		}
-	}
-	require.NotEmpty(t, failed, "the undecodable record must red the deploy rather than silently do nothing")
-}
+// unreadable flag of its own to gate on, so a fixture built by hand at this
+// layer (DeployFixReport{}) can only pin what AdvanceDeployFix does with an
+// EMPTY report — indistinguishable from TestAdvanceDeployFix_UnrecordedExit_Reds
+// above, and no proof the reader itself zeroes a half-decoded record. That
+// proof needs readDeployFixReport AND AdvanceDeployFix in the same test, and
+// only cmd/cmddaemon can reach both:
+// TestAdvanceDeployFix_readerToArm_undecodableRecordNeverReachesTheDoneArm in
+// cmd/cmddaemon/pr_loop_reader_integration_test.go is the real regression.
 
 // SC-5554: a fixer that died without recording THIS round's dispatch —
 // Unconfirmed true — is re-dispatched within the deploy-fix bound rather than

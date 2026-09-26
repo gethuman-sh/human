@@ -91,6 +91,18 @@ func readPRReviewVerdict(ctx context.Context, project, pmKey string, notBefore t
 //
 // notBefore/read follow readPRReviewVerdict's contract, anchored on this
 // round's pr-fix-started marker instead.
+//
+// An unreadable record must not hand any of its fields through, for the same
+// reason readDeployFixReport zeroes its own (SC-5554 review note 1):
+// json.Unmarshal keeps decoding fields that precede the rejected one, so a
+// record like {"options":[...],"exit":123} would otherwise leave FixOptions
+// fully populated with FixExit empty — and escalatePRLoop, which decides
+// between a [human:options] block and the failed marker from FixExit/
+// FixOptions alone, would read that as "two-or-more directions" and post a
+// decision built out of directions the fixer never actually recorded readably
+// (SC-5554 verify gap 1). Zeroed here, at the one place that reads the raw
+// JSON, so every consumer — today's and any future one — sees the same "no
+// record" shape an unreadable read already means everywhere else in this loop.
 func readPRFixReport(ctx context.Context, project, pmKey string, notBefore time.Time, logger zerolog.Logger) (exit string, options []daemon.BoardOption, summary, head string, read stageRead) {
 	var v struct {
 		Exit     string               `json:"exit"`
@@ -100,6 +112,9 @@ func readPRFixReport(ctx context.Context, project, pmKey string, notBefore time.
 		Head     string               `json:"head"`
 	}
 	read = readStageReportSettled(ctx, project, pmKey, "stage.pr-fix", notBefore, &v, logger)
+	if read.unreadable {
+		v.Exit, v.Options, v.Deferred, v.Summary, v.Head = "", nil, "", "", ""
+	}
 	// deferred is the findings note the options block leads with, so it wins
 	// wherever there are findings to defer. An outage deferred nothing and its one
 	// line is the card's face — which substrate was unreachable — so there the
