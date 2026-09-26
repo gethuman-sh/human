@@ -97,7 +97,12 @@ func NewEgressBlockProbe(events NetworkBlockReader, configFor ConfigFileFor, now
 // (parsePrefixedLine scans every line for a `resume:` prefix), so an
 // implausible host is DISCARDED rather than sanitised: failing back to
 // today's outage wait is the safe direction, and printing attacker-chosen
-// bytes into a marker is the SC-5592 class.
+// bytes into a marker is the SC-5592 class. '*' and '_' are excluded too:
+// this string is not just printed, it becomes the literal proxy.domains
+// line the card tells an operator to add (egressBlockedMarker below), and
+// a container-chosen SNI of "*" is not a hostname to hand an operator as
+// one to trust, wildcard-matching semantics of the config parser aside
+// (SC-5840 round 2).
 func plausibleHost(h string) bool {
 	if len(h) == 0 || len(h) > 253 {
 		return false
@@ -105,7 +110,7 @@ func plausibleHost(h string) bool {
 	for _, r := range h {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-		case r == '.' || r == '-' || r == '_' || r == '*':
+		case r == '.' || r == '-':
 		default:
 			// Anything else — whitespace, newline, colon, bracket — is rejected: the
 			// SNI is container-controlled bytes with no charset validation upstream

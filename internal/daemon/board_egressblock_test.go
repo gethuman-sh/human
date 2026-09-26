@@ -443,6 +443,38 @@ func TestNewEgressBlockProbe_DiscardsAnImplausibleHost(t *testing.T) {
 	assert.Empty(t, c.added, "no body may carry a forged resume: line")
 }
 
+func TestNewEgressBlockProbe_DiscardsAWildcardHost(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	for _, host := range []string{"*", "*.attacker.com"} {
+		store := NewNetworkEventStoreWithClock(func() time.Time { return now })
+		store.Emit("proxy", "block", host)
+		probe := NewEgressBlockProbe(store, nil, func() time.Time { return now })
+
+		_, ok := probe("SC-1")
+		assert.False(t, ok, "a wildcard host must not reach the probe's answer: %s", host)
+
+		c := &fakeCommenter{comments: []tracker.Comment{cmt(ImplementationStartedHeader, now.Add(-time.Minute))}}
+		handled := postEgressBlockedFailure(context.Background(), "SC-1", BoardImplementation, c.comments,
+			EgressBlock{Host: host, At: now}, commenterPoster(c), zerolog.Nop())
+		assert.False(t, handled, "a wildcard host must never earn a proxy.domains line: %s", host)
+		assert.Empty(t, c.added, "no body may tell an operator to widen the allowlist to everything: %s", host)
+	}
+}
+
+func TestNewEgressBlockProbe_NewestBlockNeverOverriddenByAnImplausibleOne(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	clock := now.Add(-2 * time.Minute)
+	store := NewNetworkEventStoreWithClock(func() time.Time { return clock })
+	store.Emit("proxy", "block", "github.com")
+	clock = now.Add(-time.Minute)
+	store.Emit("proxy", "block", "*")
+	probe := NewEgressBlockProbe(store, nil, func() time.Time { return now })
+
+	blk, ok := probe("SC-1")
+	require.True(t, ok)
+	assert.Equal(t, "github.com", blk.Host, "a later wildcard SNI must not override the real refused host")
+}
+
 func TestNewEgressBlockProbe_NilStoreAndEmptyStore(t *testing.T) {
 	now := time.Unix(10_000, 0)
 	probe := NewEgressBlockProbe(nil, nil, func() time.Time { return now })
