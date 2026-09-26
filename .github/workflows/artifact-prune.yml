@@ -1,0 +1,45 @@
+name: Prune Actions artifacts
+
+# desktop.yml's retention-days: 3 (SC-5912) only governs artifacts uploaded
+# after that change merged — GitHub does not retroactively shorten the
+# expiry of artifacts already sitting in storage. The 100 live artifacts the
+# ticket found (1.1 GB, oldest from 2026-08-10) would otherwise keep their
+# original 90-day expiry and stay over the included 0.5 GB through the next
+# billing cycle. The ticket rules out clearing that backlog by hand, so this
+# runs daily and deletes anything past its intended 3-day lifetime,
+# regardless of which workflow produced it or when it was uploaded.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  actions: write
+
+jobs:
+  prune:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Delete artifacts older than 3 days
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cutoff=$(date -u -d '3 days ago' +%s)
+          page=1
+          while :; do
+            resp=$(gh api "repos/${REPO}/actions/artifacts?per_page=100&page=${page}")
+            count=$(jq '.artifacts | length' <<<"$resp")
+            [ "$count" -eq 0 ] && break
+            jq -c '.artifacts[]' <<<"$resp" | while read -r artifact; do
+              id=$(jq -r '.id' <<<"$artifact")
+              created=$(jq -r '.created_at' <<<"$artifact")
+              created_ts=$(date -u -d "$created" +%s)
+              if [ "$created_ts" -lt "$cutoff" ]; then
+                echo "Deleting artifact ${id} (created ${created})"
+                gh api -X DELETE "repos/${REPO}/actions/artifacts/${id}"
+              fi
+            done
+            page=$((page + 1))
+          done

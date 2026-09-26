@@ -120,6 +120,14 @@ jobs:
           name: human-board-${{ matrix.os }}
           path: desktop/build/bin/
           if-no-files-found: warn
+          # The artifact exists to inspect a failing PR build, not to distribute
+          # the app: each release is cut from its own fresh build (see
+          # release.extra_files in .goreleaser.yaml), never reused from a PR
+          # run here. At the default 90 days the two matrix legs held 1.1 GB
+          # across 100 runs and exhausted the account's included Actions
+          # storage; artifact-prune.yml also drains anything already past
+          # this lifetime that predates this change (SC-5912).
+          retention-days: 3
 
       # The wailsapp tag that keeps desktop/ out of ci.yml's `go list ./...`
       # also keeps its *_test.go files from running anywhere — this is the
