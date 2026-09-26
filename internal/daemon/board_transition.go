@@ -62,6 +62,11 @@ type Deployer interface {
 	// richer surface the failure/timeout headlines name the offending checks
 	// from. Best-effort on those paths: a read failure degrades the headline to
 	// its bare reason, never inverts the gate verdict.
+	//
+	// It is also what the gate CLASSIFIES a red head from — which failing
+	// checks a code change could turn green (SC-5843) — and the same
+	// best-effort rule holds: a read failure leaves the red unattributed and
+	// therefore code-fixable, never silenced.
 	ReadPullRequest(ctx context.Context, workspaceDir string, number int) (*forge.PullRequestState, error)
 	// EnsureMergeable makes the handoff branch current with the base before the
 	// merge is attempted: it verifies the PR is mergeable against current main
@@ -2739,7 +2744,9 @@ func secretStoreFailureHeadline(err error) (string, bool) {
 // secret-store failure (SC-2042) and an unreadable state (SC-1996) are both
 // credential/read failures the operator fixes outside the branch, never a
 // failing check the checks themselves reported — so neither ever claims the
-// checks failed.
+// checks failed. A head red only on checks no code change can turn green
+// (SC-5843) DID come from the checks, and still must not advise a code fix: it
+// names those checks and asks for a re-run of them.
 func ciFailureHeadline(err error) string {
 	if reason, ok := secretStoreFailureHeadline(err); ok {
 		return reason
@@ -2749,6 +2756,9 @@ func ciFailureHeadline(err error) string {
 	}
 	if headLagged(err) {
 		return headLagHeadline
+	}
+	if externalChecksRed(err) {
+		return externalChecksHeadline(err)
 	}
 	if strings.Contains(err.Error(), "timed out") {
 		return "CI did not finish within the deploy window" +
@@ -2772,15 +2782,21 @@ func checkSuffix(err error, detailKey, label string) string {
 
 // ciFailureFixable reports whether a CI gate error is a genuine check FAILURE a
 // fixer can repair (lint/test), as opposed to a gate timeout, an unreadable
-// state, or a secret-store failure. A timeout is an infra/slowness signal, an
-// unreadable state and a secret-store failure are both credential failures —
-// none of the three has anything for a code fixer to change (SC-1996, SC-2042).
+// state, a secret-store failure, or a head red only on checks no code change
+// can turn green. A timeout is an infra/slowness signal; an unreadable state and
+// a secret-store failure are both credential failures; a signature job or bot
+// comment step asserts something other than the branch's code — none of the four
+// has anything for a code fixer to change (SC-1996, SC-2042, SC-5843). A red it
+// cannot attribute stays fixable, so no carve-out can silence a build break.
 func ciFailureFixable(err error) bool {
 	if _, ok := secretStoreFailureHeadline(err); ok {
 		return false // a failed secret read is not a code defect
 	}
 	if headLagged(err) {
 		return false // a forge that never moved its PR resource is not a code defect
+	}
+	if externalChecksRed(err) {
+		return false // a check no code change can turn green is not a code defect
 	}
 	return err != nil && !strings.Contains(err.Error(), "timed out") && !stateUnreadable(err)
 }
@@ -3045,6 +3061,12 @@ func (d BoardTransitionDeps) closeTicketBestEffort(pmKey string) {
 // gate); the wait first blocks until the forge reports it before reading any
 // verdict, so a verdict is never read for the tip the rebase replaced
 // (SC-5395).
+//
+// A red verdict is classified before it is returned: only a red a code change
+// could turn green is returned as the fixable "CI checks failed" (with only
+// those check names on it). A head red solely on checks no code change can turn
+// green is waited out for deployExternalCheckGrace and then returned tagged
+// non-fixable, so the gate stops instead of dispatching a fixer (SC-5843).
 func (d BoardTransitionDeps) waitForChecks(ctx context.Context, res PRResult, wantHead string) error {
 	if err := d.awaitPublishedHead(ctx, res, wantHead); err != nil {
 		return err
@@ -3057,7 +3079,7 @@ func (d BoardTransitionDeps) waitForChecks(ctx context.Context, res PRResult, wa
 	// enough to tell the two apart without a line per poll.
 	d.Logger.Info().Int("pr", res.Number).Msg("deploy: waiting for CI checks")
 	polls := 0
-	var noneSince time.Time
+	var noneSince, externalRedSince time.Time
 	for {
 		state, err := d.Deployer.PullRequestChecks(ctx, d.WorkspaceDir, res.Number)
 		if err != nil {
@@ -3071,9 +3093,20 @@ func (d BoardTransitionDeps) waitForChecks(ctx context.Context, res PRResult, wa
 			d.Logger.Info().Int("pr", res.Number).Int("polls", polls).Str("head", wantHead).Msg("deploy: CI checks passed")
 			return nil
 		case forge.ChecksFailing:
-			d.Logger.Info().Int("pr", res.Number).Int("polls", polls).Str("head", wantHead).Msg("deploy: CI checks failed")
-			return errors.WithDetails("CI checks failed", "pr", res.URL,
-				deployFailingChecksDetail, d.checkNames(res.Number, forge.ChecksFailing))
+			// A red head is not automatically a broken build. Where every
+			// failing check is one no code change can turn green (a signature
+			// job, a bot comment step) the red is waited out like an absence —
+			// such a check routinely re-runs — instead of spending a repair
+			// round on a branch with nothing to repair (SC-5843). The clock is
+			// never reset: a check that flickers red-pending-red does not earn
+			// a fresh grace each time, so the total wait stays bounded.
+			if externalRedSince.IsZero() {
+				externalRedSince = time.Now()
+			}
+			if err := d.redHeadVerdict(res, polls, wantHead,
+				time.Since(externalRedSince) >= deployExternalCheckGrace); err != nil {
+				return err
+			}
 		case forge.ChecksNone:
 			// Absence is pending until it has lasted the grace: the head may be
 			// too young for its CI to have registered. Past the grace it is a

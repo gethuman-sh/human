@@ -521,7 +521,7 @@ func readPRServer(t *testing.T, pull, checkRuns, combined string) *httptest.Serv
 func TestReadPullRequest_fullState(t *testing.T) {
 	pull := `{"number":7,"head":{"ref":"feat","sha":"abc123"},"base":{"ref":"main"},"mergeable":true}`
 	checkRuns := `{"check_runs":[` +
-		`{"name":"build","status":"completed","conclusion":"success","started_at":"2026-08-01T10:00:00Z"},` +
+		`{"name":"build","status":"completed","conclusion":"success","started_at":"2026-08-01T10:00:00Z","app":{"slug":"github-actions"}},` +
 		`{"name":"lint","status":"completed","conclusion":"failure","started_at":"2026-08-01T10:00:00Z","details_url":"https://ci/lint"}` +
 		`]}`
 	combined := `{"state":"failure","total_count":1,"statuses":[{"context":"ci/legacy","state":"failure","target_url":"https://ci/legacy"}]}`
@@ -539,8 +539,10 @@ func TestReadPullRequest_fullState(t *testing.T) {
 	assert.True(t, state.Mergeable)
 
 	require.Len(t, state.Checks, 3)
-	assert.Equal(t, forge.CheckResult{Name: "build", Conclusion: forge.ChecksPassing}, state.Checks[0])
+	assert.Equal(t, forge.CheckResult{Name: "build", Conclusion: forge.ChecksPassing, App: "github-actions"}, state.Checks[0])
 	assert.Equal(t, forge.CheckResult{Name: "lint", Conclusion: forge.ChecksFailing, DetailsURL: "https://ci/lint"}, state.Checks[1])
+	// A legacy commit status carries no owning app: App stays "", the
+	// "cannot attribute" case a consumer must treat as code-affecting.
 	assert.Equal(t, forge.CheckResult{Name: "ci/legacy", Conclusion: forge.ChecksFailing, DetailsURL: "https://ci/legacy"}, state.Checks[2])
 }
 

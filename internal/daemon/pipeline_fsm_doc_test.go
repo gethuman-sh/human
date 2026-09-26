@@ -264,3 +264,38 @@ func TestPipelineFSM_PlanningTransitionsNameTheFixClassification(t *testing.T) {
 		}
 	}
 }
+
+// SC-5843: the deploy-fix dispatch condition narrowed — a red a code change
+// cannot turn green stops the gate instead of sending a fixer — and `human fsm
+// where` serves this prose to the agents and to a person reading a red card.
+// The document has drifted from this file's code before ([docs] SC-5627, SC-5840),
+// so the words and the budget are pinned here.
+func TestPipelineFSM_CIRedExcludesChecksNoCodeChangeCanFix(t *testing.T) {
+	doc := loadFSMDoc(t)
+
+	var ciGate string
+	for _, s := range doc.States {
+		if s.Name == "ci-gate" {
+			ciGate = s.Holds
+		}
+	}
+	require.NotEmpty(t, ciGate, "the document must declare a ci-gate state")
+	assert.Contains(t, ciGate, "DeployExternalCheckGrace", "name the bound, not just the behaviour")
+	assert.Contains(t, ciGate, "no code change can turn green")
+
+	var ciRed struct{ doc, where string }
+	for _, e := range doc.Events {
+		if e.Name == "ci-red" {
+			ciRed.doc, ciRed.where = e.Doc, e.Where
+		}
+	}
+	require.NotEmpty(t, ciRed.doc, "ci-red is missing from the document")
+	assert.Contains(t, ciRed.doc, "SC-5843")
+	assert.Contains(t, ciRed.doc, "no code change could turn green")
+	assert.Contains(t, ciRed.where, "deploy_checks.go", "name the code that classifies")
+
+	assert.Contains(t, doc.Invariants.Constants["DeployExternalCheckGrace"], "5m",
+		"the document's budget must be the code's budget")
+	assert.Equal(t, 5*time.Minute, deployExternalCheckGrace,
+		"the code's budget must be the document's budget")
+}

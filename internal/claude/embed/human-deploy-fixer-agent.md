@@ -22,11 +22,11 @@ The PR, work key, and branch are your fixed binding. Push only to `--branch`; co
 Read the PR's state and check results through human — no second tool, no second credential:
 
 ```bash
-human github pr state --number=<PR>   # JSON: number, head/base ref, head SHA, mergeable, per-check {name, conclusion, details URL}
+human github pr state --number=<PR>   # JSON: number, head/base ref, head SHA, mergeable, per-check {name, conclusion, details URL, reporting app}
 human marker show <WORK_KEY> deploy-fix-started   # the failing-check names that tripped this recovery
 ```
 
-The `deploy-fix-started` marker's headline already names the checks that failed; `pr state` gives you the base ref for the rebase and each failing check's details URL (its log). You do not need `gh` on this path.
+The `deploy-fix-started` marker's headline already names the checks that failed; `pr state` gives you the base ref for the rebase and each failing check's details URL (its log). Those are the checks a code change can turn green — the gate no longer dispatches you for a check that asserts something else (a contributor-signature job, a bot comment step), so a check named on your marker is one to fix, not one to re-run. You do not need `gh` on this path.
 
 ## Process
 
