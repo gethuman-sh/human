@@ -123,7 +123,27 @@ const (
 	// failure and offered no way out (SC-5595). Durable on the ticket rather
 	// than held in memory, because the failure that spends it happens minutes
 	// later, in another goroutine and possibly another process.
-	MarkerDeployRetry            = "deploy-retry"
+	MarkerDeployRetry = "deploy-retry"
+	// MarkerDeployQueued records a deploy the board ACCEPTED and then held: this
+	// ticket's implementation or verification container still holds the checkout
+	// the done stage pushes from, so the launch waits up to
+	// DeployCheckoutWaitBound. It exists because the board derives a card from
+	// markers alone — a wait that records nothing is indistinguishable from a drop
+	// that was refused, so an accepted deploy read as a bounce back to a finished
+	// review and a re-drop queued a second one (SC-5878). Classified (done,
+	// running): the card moves to Deploy, and isDuplicateDrop refuses the second
+	// drop for free.
+	MarkerDeployQueued = "deploy-queued"
+	// MarkerDeployQueueAbandoned WITHDRAWS the record above: the container never
+	// released the checkout within the bound (or the daemon that was waiting
+	// stopped), so nothing was pushed and nothing failed. Deliberately NOT in
+	// orderedMarkerSpecs — it is the one running record the machine retracts
+	// rather than completes, and DeriveBoardCard drops the deploy-queued records
+	// it withdraws (retireAbandonedQueuedDeploys) so the card returns to exactly
+	// where the gesture found it: a finished review, a standing deploy failure, or
+	// a paused outage. Classifying it to a stage of its own would hand a
+	// never-reviewed card a review it never had.
+	MarkerDeployQueueAbandoned   = "deploy-queue-abandoned"
 	MarkerHandoffCheckUnreadable = "handoff-check-unreadable"
 	// MarkerLateResultReconciled records that a stage's result arrived after the
 	// stage had already been marked failed, with no relaunch marker between the
@@ -214,9 +234,17 @@ const (
 	// PlanCommentHeader / CloseFailedHeader / ClaimHeader it is content, NOT a
 	// stage transition: it MUST never join orderedMarkerSpecs, so ClassifyMarker
 	// never sees it and it never moves a card. The movement a retry causes is
-	// already recorded by the [human:pr-review-started] marker runDoneStage
-	// posts (the start-pr-review transition).
+	// already recorded by the marker the stage posts next — [human:deploy-queued]
+	// while the checkout is still held, [human:pr-review-started] once it is free
+	// (start-pr-review, deploy-queued-behind-checkout).
 	DeployRetryHeader = "[human:" + MarkerDeployRetry + "]"
+
+	// DeployQueuedHeader and DeployQueueAbandonedHeader are the headers of the two
+	// records above. Neither prefixes the other — "deploy-queued]" and
+	// "deploy-queue-abandoned]" diverge inside the name — so ClassifyMarker's
+	// prefix match stays unambiguous, the same property the -outage headers keep.
+	DeployQueuedHeader         = "[human:" + MarkerDeployQueued + "]"
+	DeployQueueAbandonedHeader = "[human:" + MarkerDeployQueueAbandoned + "]"
 
 	// Outage markers are the NON-failing transient twin of the *-failed headers,
 	// one per relaunchable stage. A stage that reported the substrate it needs was
@@ -447,6 +475,8 @@ var daemonMarkerTypes = []string{
 	MarkerPRFixStarted,
 	MarkerDeployFixStarted,
 	MarkerDeployRetry,
+	MarkerDeployQueued,
+	MarkerDeployQueueAbandoned,
 	MarkerHandoffCheckUnreadable,
 	MarkerLateResultReconciled,
 	MarkerIdeaDraft,
@@ -492,6 +522,7 @@ var orderedMarkerSpecs = []markerSpec{
 	{PRReviewPassedHeader, BoardDoneStage, BoardRunning},
 	{PRReviewFailedHeader, BoardDoneStage, BoardFailed},
 	{DeployFixStartedHeader, BoardDoneStage, BoardRunning},
+	{DeployQueuedHeader, BoardDoneStage, BoardRunning},
 	{PlanningOutageHeader, BoardPlanning, BoardOutage},
 	{ImplementationOutageHeader, BoardImplementation, BoardOutage},
 	{ReviewOutageHeader, BoardVerification, BoardOutage},

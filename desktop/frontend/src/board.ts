@@ -138,9 +138,16 @@ interface Card {
   // the Engineering-backlog age badge.
   stageEnteredAt?: string;
   // Done-stage sub-phase: "pr-review" while the machine reviewer runs, "pr-fix"
-  // while the fixer runs, absent for a plain deploy. badgeInfo reads it so the
-  // badge names the half that is actually running instead of "deploying…".
+  // while the fixer runs, "deploy-queued" while an accepted deploy waits for
+  // this ticket's own container to release the checkout, absent for a plain
+  // deploy (SC-5878). badgeInfo reads it so the badge names the half that is
+  // actually running instead of "deploying…".
   deployPhase?: string;
+  // The one-line reason a queued deploy was given up, present only while that
+  // withdrawal is the ticket's newest record. The card is back where the drop
+  // found it with nothing running, so this is what distinguishes it from a card
+  // nobody ever dropped (SC-5878).
+  deployQueueAbandoned?: string;
   // Which review→fix round a running done-stage card is in, and the bound it
   // runs against. badgeInfo appends "round 3 of 8" to the badge; absent on every
   // card that is not mid-loop, which renders exactly as before.

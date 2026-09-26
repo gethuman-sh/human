@@ -608,6 +608,69 @@ func TestDeriveBoardCard_DeployPhasePRReview(t *testing.T) {
 	assert.Equal(t, "pr-review", card.DeployPhase)
 }
 
+// SC-5878: an abandoned queue must not paint over a more urgent standing fact
+// about the done stage. A paused outage and a standing failure are both older
+// than the queued/abandoned pair sitting on top of them in the thread, and the
+// retraction (retireAbandonedQueuedDeploys) removes only the queued record — the
+// outage/failure marker underneath is what the card reads once it is gone.
+func TestOutageRedriveQueuedDeployReturnsToPaused(t *testing.T) {
+	base := time.Unix(1, 0)
+	abandonedBody := composedDeployQueueAbandonedBody(
+		"no daemon is waiting for the checkout any more — the run that accepted this deploy stopped", "", "")
+
+	t.Run("outage", func(t *testing.T) {
+		resumeAt := base.Add(2 * time.Hour)
+		thread := []tracker.Comment{
+			cmt(DeployOutageHeader+"\nresume: "+resumeAt.Format(time.RFC3339), base),
+			cmt(composedDeployQueuedBody("board-SC-1-implementation"), base.Add(time.Minute)),
+			cmt(abandonedBody, base.Add(2*time.Minute)),
+		}
+
+		card := DeriveBoardCard(thread, tracker.CategoryUnstarted, false)
+
+		assert.Equal(t, BoardDoneStage, card.Stage)
+		assert.Equal(t, BoardOutage, card.State, "a paused outage outranks the withdrawal, not the other way round")
+		assert.Equal(t, resumeAt.Format(time.RFC3339), card.ResumeAt, "the outage's own resume instant survives the retraction")
+		assert.NotEmpty(t, card.DeployQueueAbandoned, "the withdrawal reason is still the newest record and still reported")
+	})
+
+	t.Run("failed", func(t *testing.T) {
+		thread := []tracker.Comment{
+			cmt(DeployFailedHeader+"\nreason: CI checks failed on the pull request", base),
+			cmt(composedDeployQueuedBody("board-SC-1-implementation"), base.Add(time.Minute)),
+			cmt(abandonedBody, base.Add(2*time.Minute)),
+		}
+
+		card := DeriveBoardCard(thread, tracker.CategoryUnstarted, false)
+
+		assert.Equal(t, BoardDoneStage, card.Stage)
+		assert.Equal(t, BoardFailed, card.State, "the standing failure outranks the withdrawal, not the other way round")
+	})
+}
+
+// SC-5878: a queued-then-abandoned deploy must not stick to the ticket — a
+// fresh drop posted after the withdrawal is a NEW queue, not the retired one,
+// so the card must requeue (not read as the finished review the withdrawal
+// restored) and the stale abandonment reason must clear rather than ride along
+// on a card that is once again waiting.
+func TestDeriveBoardCard_AFreshDropAfterAnAbandonedQueueRequeues(t *testing.T) {
+	base := time.Unix(1, 0)
+	comments := []tracker.Comment{
+		cmt(composedDeployQueuedBody("board-SC-1-implementation"), base),
+		cmt(composedDeployQueueAbandonedBody(
+			"no daemon is waiting for the checkout any more — the run that accepted this deploy stopped", "", ""),
+			base.Add(time.Minute)),
+		cmt(composedDeployQueuedBody("board-SC-1-implementation"), base.Add(2*time.Minute)),
+	}
+
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, BoardDoneStage, card.Stage)
+	assert.Equal(t, BoardRunning, card.State)
+	assert.Equal(t, DeployPhaseQueued, card.DeployPhase)
+	assert.Empty(t, card.DeployQueueAbandoned, "a fresh drop clears the stale withdrawal reason")
+}
+
 // doneStageLoopActive answers the COARSER question — is the review→fix loop
 // mid-flight at all — for the re-drive pass (board_reconcile.go:262) and the
 // stuck-running guard (:370). Splitting the phase out must not narrow it: both

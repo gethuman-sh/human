@@ -244,6 +244,20 @@ var specs = map[string]spec{
 	"nothing-to-do":   {required: []string{"evidence", "reason"}, fieldEnum: nothingToDoReasonEnum()},
 	"deploy-started":  {},
 	"deploy-failed":   {required: []string{"reason"}, optional: append(BlockerFields(), SilenceReapFields()...), fieldEnum: blockerKindEnum()},
+	// SC-5878. The deploy interlock's two records. A deploy the board accepted and
+	// then held is not a refusal and not a failure: it is an accepted gesture with
+	// nothing pushed yet, and on a marker-derived board it has to be written down
+	// or the card reads as a bounce. `waiting` is required because the whole
+	// record is about WHAT is being waited for — a queued deploy that cannot name
+	// the holder is not a record a person can act on.
+	"deploy-queued": {required: []string{"waiting"}, optional: []string{"bound"}},
+	// The withdrawal of the record above. `reason` is required for the same
+	// purpose as on every *-failed marker — never a bare header — even though this
+	// is NOT a failure: nothing ran, so the card returns to where the gesture
+	// found it rather than reddening (SC-5691's rule that the done stage is not
+	// redded for another stage's hang). `agent` and `waited` are optional because
+	// the durable path (a daemon that stopped mid-wait) knows neither.
+	"deploy-queue-abandoned": {required: []string{"reason"}, optional: []string{"agent", "waited"}},
 	// A deployed marker must say HOW the work shipped, and there are two honest
 	// answers: through a pull request, or by a branch that was already in the
 	// base when the deploy ran. Requiring pr outright made the second case

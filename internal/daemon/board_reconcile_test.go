@@ -582,3 +582,62 @@ func TestReconcileStuckRunning_ordinaryStagesKeepTheShortGrace(t *testing.T) {
 	assert.Equal(t, 1, n, "20 minutes is past the ordinary 15-minute grace")
 	require.Len(t, posted, 1)
 }
+
+// A queued deploy nobody is waiting for any more (the daemon that accepted the
+// drop stopped mid-wait) is WITHDRAWN, not reddened, once its own grace has
+// passed: [human:deploy-queue-abandoned] through PostFailed, never
+// [human:deploy-failed], and reconcileStuckRunning reports it as NOT reddened
+// (SC-5878, SC-5691's no-blame rule extended to the daemon-side wait). A second
+// pass finds nothing left to withdraw: retireAbandonedQueuedDeploys has already
+// dropped the queued record the withdrawal spoke for.
+func TestReconcileStuckRunning_WithdrawsAStrandedQueuedDeploy(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	comments := []tracker.Comment{cmt(DeployQueuedHeader, now.Add(-31*time.Minute))}
+	cards := []ReconcileCard{{Key: "SC-1", Comments: comments}}
+	var posted []struct{ Key, Body string }
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted)}, now)
+
+	assert.Equal(t, 0, n, "withdrawing a queued deploy is not reddening the card")
+	require.Len(t, posted, 1)
+	assert.True(t, strings.HasPrefix(posted[0].Body, DeployQueueAbandonedHeader))
+	assert.False(t, strings.HasPrefix(posted[0].Body, DeployFailedHeader))
+
+	comments = append(comments, cmt(posted[0].Body, now.Add(-30*time.Minute)))
+	cards = []ReconcileCard{{Key: "SC-1", Comments: comments}}
+	var posted2 []struct{ Key, Body string }
+	n2 := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted2)}, now)
+
+	assert.Equal(t, 0, n2)
+	assert.Empty(t, posted2, "a second pass has nothing left to withdraw")
+}
+
+// The queued deploy owns its own clock — DeployCheckoutWaitBound (15m) +
+// StuckRunningGrace (15m) = 30m — because the in-process wait that accepted
+// the drop runs for the full 15 minutes on its own before it withdraws its own
+// record; judging it on the ordinary 15-minute grace would race that wait
+// (SC-5878). The control at the SAME age with an ordinary running marker IS
+// reddened, which is what proves stuckGraceFor's new branch is load-bearing
+// rather than accidentally unreachable.
+func TestReconcileStuckRunning_SparesAQueuedDeployInsideItsOwnBound(t *testing.T) {
+	now := time.Unix(10_000, 0)
+
+	queuedCards := []ReconcileCard{{
+		Key:      "SC-1",
+		Comments: []tracker.Comment{cmt(DeployQueuedHeader, now.Add(-20*time.Minute))},
+	}}
+	var posted []struct{ Key, Body string }
+	n := reconcileStuckRunning(context.Background(), takeoverSet(queuedCards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted)}, now)
+
+	assert.Equal(t, 0, n, "20 minutes is still inside DeployCheckoutWaitBound + StuckRunningGrace")
+	assert.Empty(t, posted)
+
+	controlCards := []ReconcileCard{{
+		Key:      "SC-1",
+		Comments: []tracker.Comment{cmt("[human:implementation-started]", now.Add(-20*time.Minute))},
+	}}
+	var controlPosted []struct{ Key, Body string }
+	nControl := reconcileStuckRunning(context.Background(), takeoverSet(controlCards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&controlPosted)}, now)
+
+	assert.Equal(t, 1, nControl, "the same age past the ordinary 15-minute grace reds a non-queued card")
+	require.Len(t, controlPosted, 1)
+}

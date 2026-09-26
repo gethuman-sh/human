@@ -702,6 +702,24 @@ test("an unknown deploy phase falls back to the review wording rather than blank
   assert.equal(badgeInfo({ stage: "done", state: "running", deployPhase: "something-new" }).text, "PR review…");
 });
 
+// SC-5878: an accepted deploy held behind this ticket's container reads as a wait,
+// never as a spinner over work nobody started, and never as the phase the waiting
+// container keeps recording.
+test("queued deploy badge names the wait and outranks activity (SC-5878)", () => {
+  const info = badgeInfo({ stage: "done", state: "running", deployPhase: "deploy-queued", activity: "reviewing", activityAt: new Date().toISOString() });
+  assert.equal(info.cls, "await");
+  assert.equal(info.spinner, false);
+  assert.match(info.text, /deploy queued/);
+});
+
+test("an abandoned deploy queue says why on the card (SC-5878)", () => {
+  const info = badgeInfo({ stage: "verification", state: "done", verdict: "pass", branch: "b",
+    deployQueueAbandoned: "board-SC-1-implementation did not release the checkout within 15m0s" });
+  assert.equal(info.cls, "warning");
+  assert.match(info.text, /queued deploy gave up/);
+  assert.match(info.text, /did not release the checkout/);
+});
+
 // --- The Deploy control and its lane agree (SC-4151 F16) ---
 
 test("an empty deploy lane still says there is nothing to deploy yet", () => {

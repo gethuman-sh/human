@@ -138,10 +138,19 @@ type BoardCard struct {
 	RunningStage BoardStage `json:"running_stage,omitempty"`
 	// DeployPhase names the done-stage sub-phase for a running card: "pr-review"
 	// while the machine reviewer runs, "pr-fix" while the fixer runs, empty for
-	// a plain deploy. It lets the board badge read "PR review…"/"fixing PR
-	// review findings…" instead of "deploying…" so the loop is visible while it
-	// runs.
+	// a plain deploy, and "deploy-queued" while an accepted deploy waits for this
+	// ticket's own container to release the checkout (SC-5878) — a phase with no
+	// agent behind it, which is why AgentNamesForCard allowlists the two loop
+	// halves rather than testing for emptiness. It lets the board badge read "PR
+	// review…"/"fixing PR review findings…" instead of "deploying…" so the loop
+	// is visible while it runs.
 	DeployPhase string `json:"deploy_phase,omitempty"`
+	// DeployQueueAbandoned is the one-line reason a queued deploy was given up,
+	// set only while that withdrawal is the ticket's newest record. The card is
+	// back where the gesture found it and nothing is running, so the reason is
+	// the only thing that distinguishes it from a card nobody ever dropped
+	// (SC-5878). Empty on every other card.
+	DeployQueueAbandoned string `json:"deploy_queue_abandoned,omitempty"`
 	// PRReviewRound is which round of the pre-merge review→fix loop a RUNNING
 	// done-stage card is in, and PRReviewRoundCap the outer bound it runs
 	// against (DefaultPRReviewRounds). Both are zero on every other card, and
@@ -195,6 +204,11 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 	if isIdea {
 		return cardAt(atStage(BoardIdeas))
 	}
+
+	// A withdrawn queued deploy is not history the card carries: retract it once,
+	// here, so every reader below — the furthest-stage pass, the transition gates,
+	// every reconcile pass — sees the card as it was before the gesture (SC-5878).
+	comments = retireAbandonedQueuedDeploys(comments)
 
 	furthest := BoardBacklog
 	furthestRank := -1
@@ -275,6 +289,7 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 	card.RunningStage = runningStageElsewhere(comments, card.placement())
 	card.StopDecision, card.StopLinkedKey, card.StopReasoning = ticketReviewStop(latest)
 	card.ResolvedReason = nothingToDoReason(latest)
+	card.DeployQueueAbandoned = deployQueueAbandonedReason(comments)
 	attachOpenOptions(&card, comments)
 	return card
 }
@@ -653,6 +668,11 @@ func latestCommentInStage(comments []tracker.Comment, stage BoardStage) (tracker
 const (
 	DeployPhasePRReview = "pr-review"
 	DeployPhasePRFix    = "pr-fix"
+	// DeployPhaseQueued names the accepted-but-held deploy. It is NOT a loop half:
+	// no agent runs for it, and doneStageLoopHalf must never learn it — that would
+	// widen doneStageLoopActive, which gates the PR-loop re-drive and the
+	// stuck-running exemption (SC-5878).
+	DeployPhaseQueued = MarkerDeployQueued
 )
 
 // deployPhaseFor names the done-stage sub-phase of a running card: which half of
@@ -664,6 +684,9 @@ func deployPhaseFor(card BoardCard, comments []tracker.Comment) string {
 		return ""
 	}
 	if card.State == BoardRunning {
+		if deployQueueWaiting(comments) {
+			return DeployPhaseQueued
+		}
 		return doneStageLoopHalf(comments)
 	}
 	// A FAILED done-stage card still has a loop half behind it, and it is the
@@ -675,6 +698,57 @@ func deployPhaseFor(card BoardCard, comments []tracker.Comment) string {
 		return doneStageStartedHalf(comments)
 	}
 	return ""
+}
+
+// deployQueueWaiting reports that the card's newest done-stage marker is the
+// accept-time queued record — a deploy accepted and waiting for the checkout.
+// Asked of the done stage only, and deliberately NOT folded into
+// doneStageLoopHalf: that answer gates the PR-loop re-drive and the stuck-running
+// exemption, and a queued deploy is neither loop half.
+func deployQueueWaiting(comments []tracker.Comment) bool {
+	_, latest := latestStateInStage(comments, BoardDoneStage)
+	return strings.HasPrefix(strings.TrimSpace(latest.Body), DeployQueuedHeader)
+}
+
+// retireAbandonedQueuedDeploys drops every [human:deploy-queued] record an
+// abandonment has withdrawn. This is the one running record the machine retracts
+// rather than completes — nothing ran — so the card must read as it did before the
+// gesture: a finished review, a standing deploy failure, or a paused outage,
+// whichever the queue was started from. Only the records OLDER than the newest
+// withdrawal go: a fresh drop posts a newer queued record that the withdrawal does
+// not speak for.
+func retireAbandonedQueuedDeploys(comments []tracker.Comment) []tracker.Comment {
+	abandoned, ok := latestCommentWithHeader(comments, DeployQueueAbandonedHeader)
+	if !ok {
+		return comments
+	}
+	kept := make([]tracker.Comment, 0, len(comments))
+	for _, c := range comments {
+		if strings.HasPrefix(strings.TrimSpace(c.Body), DeployQueuedHeader) && !commentNewer(c, abandoned) {
+			continue
+		}
+		kept = append(kept, c)
+	}
+	return kept
+}
+
+// deployQueueAbandonedReason is the withdrawal's reason while the withdrawal is
+// still the ticket's newest word. Anything newer — a fresh drop's queued record, a
+// launched reviewer, a relaunched build — retires it, the same way currentVerdict
+// stops governing once a handoff answers it.
+func deployQueueAbandonedReason(comments []tracker.Comment) string {
+	abandoned, ok := latestCommentWithHeader(comments, DeployQueueAbandonedHeader)
+	if !ok {
+		return ""
+	}
+	if newest, ok := latestMarkerOverall(comments); ok && !commentNewer(abandoned, newest.comment) {
+		return ""
+	}
+	m, parsed := marker.ParseBody(abandoned.Body)
+	if !parsed {
+		return ""
+	}
+	return strings.TrimSpace(m.Fields["reason"])
 }
 
 // prLoopRoundFor is which review→fix round a running loop card is in, with the
@@ -694,7 +768,10 @@ func deployPhaseFor(card BoardCard, comments []tracker.Comment) string {
 // (chargedPRReviewRounds), so the badge counts the rounds that actually ran —
 // the same rounds the bound is spent on (SC-5627).
 func prLoopRoundFor(card BoardCard, comments []tracker.Comment) (round, bound int) {
-	if card.Stage != BoardDoneStage || card.State != BoardRunning || card.DeployPhase == "" {
+	// The two loop halves by name, not "any phase": a queued deploy is not a
+	// round, and appending "round 3 of 8" to a wait would count a round nothing ran.
+	if card.Stage != BoardDoneStage || card.State != BoardRunning ||
+		(card.DeployPhase != DeployPhasePRReview && card.DeployPhase != DeployPhasePRFix) {
 		return 0, 0
 	}
 	n := chargedPRReviewRounds(comments)
@@ -825,7 +902,14 @@ func failureBody(body string) string {
 // latestStateInStage resolves the stage's state from its newest marker and
 // returns that marker's comment so a failure message can be extracted.
 func latestStateInStage(comments []tracker.Comment, stage BoardStage) (BoardState, tracker.Comment) {
-	latest, ok := latestCommentInStage(comments, stage)
+	// A withdrawn queued deploy must not read back as the newest done-stage
+	// marker for any caller of this function — not only the one derivation
+	// pass that already retires it up front (SC-5878). Retiring again here
+	// is idempotent (already-retracted callers pass a comment list with
+	// nothing left to drop) and is what keeps deployRedriveEligible and
+	// stageAlreadyFailed from mistaking a stale [human:deploy-queued] for
+	// the current state of the done stage forever after an abandonment.
+	latest, ok := latestCommentInStage(retireAbandonedQueuedDeploys(comments), stage)
 	if !ok {
 		return BoardIdle, tracker.Comment{}
 	}

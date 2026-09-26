@@ -55,17 +55,34 @@ func (d BoardTransitionDeps) checkoutHolder(pmKey string) (string, bool) {
 // reconcile pass moves a plain `reviewed` card into the done stage (the only
 // done-stage re-drive is redeploy-after-outage, for a card already at
 // substrate-down), so a marker-less refusal of the Deploy gesture would strand
-// it. Past the bound the launch is abandoned with nothing recorded on the
-// ticket: a container still alive fifteen minutes after its verdict is hung, and
-// the stuck-running sweep is what answers for it — redding the done stage over
-// another stage's hang would blame the wrong one (SC-5691).
-func (d BoardTransitionDeps) awaitCheckoutFree(ctx context.Context, pmKey string) error {
+// it.
+//
+// onQueued, when non-nil, is called ONCE with the holding agent's name at the
+// moment the wait begins — never when the checkout is already free. It is how the
+// BOARD's routes record the queued deploy on the ticket: the board derives a card
+// from markers alone, so a wait held for minutes and recorded nowhere is
+// indistinguishable from a refused drop (SC-5878). Nil for the CLI route, whose
+// caller is told ErrDeployCheckoutBusy directly and which records nothing before a
+// start by design ("nil disables", this package's convention).
+//
+// Past the bound the launch is abandoned and ErrDeployCheckoutBusy is returned to
+// the caller, which decides what that means for the ticket. The done stage is
+// still never REDDED for it: a container alive fifteen minutes after its verdict
+// is hung and the stuck-running sweep answers for it — redding the done stage
+// over another stage's hang would blame the wrong one (SC-5691).
+//
+// A cancelled wait records no withdrawal: the daemon is going away, and the
+// stranded record is retired by the stuck-running pass (abandonStrandedQueuedDeploy).
+func (d BoardTransitionDeps) awaitCheckoutFree(ctx context.Context, pmKey string, onQueued func(holder string)) error {
 	holder, held := d.checkoutHolder(pmKey)
 	if !held {
 		return nil
 	}
 	d.Logger.Info().Str("pm", pmKey).Str("agent", holder).Str("bound", DeployCheckoutWaitBound.String()).
 		Msg("deploy: waiting for the implementation container to release the checkout")
+	if onQueued != nil {
+		onQueued(holder)
+	}
 	deadline := time.Now().Add(DeployCheckoutWaitBound)
 	for {
 		select {

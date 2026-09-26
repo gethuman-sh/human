@@ -230,11 +230,12 @@ type BoardViewCard struct {
 	StageRunStartedAt string `json:"stageRunStartedAt,omitempty"`
 	// DeployPhase names the done-stage sub-phase of a running card: "pr-review"
 	// while the machine reviewer runs, "pr-fix" while the fixer runs, empty for
-	// a plain deploy. Both halves of the loop are named because they are
-	// separate agents doing opposite work — a card that says "PR review…" while
-	// the fixer runs sends a reader to the wrong log (SC-3569). Populated by the
-	// explicit field copy below — the daemon→desktop hop is a Go copy, not a
-	// JSON re-tag.
+	// a plain deploy, and "deploy-queued" while an accepted deploy waits for this
+	// ticket's own container to release the checkout (SC-5878). Both halves of
+	// the loop are named because they are separate agents doing opposite work —
+	// a card that says "PR review…" while the fixer runs sends a reader to the
+	// wrong log (SC-3569). Populated by the explicit field copy below — the
+	// daemon→desktop hop is a Go copy, not a JSON re-tag.
 	DeployPhase string `json:"deployPhase,omitempty"`
 	// PRReviewRound / PRReviewRoundCap are which round of the pre-merge
 	// review→fix loop a RUNNING done-stage card is in and the outer bound it
@@ -246,6 +247,12 @@ type BoardViewCard struct {
 	// "round 8 of 3". Populated by the explicit field copy in compose.go.
 	PRReviewRound    int `json:"prReviewRound,omitempty"`
 	PRReviewRoundCap int `json:"prReviewRoundCap,omitempty"`
+	// DeployQueueAbandoned is the one-line reason a queued deploy was given up,
+	// present only while that withdrawal is the ticket's newest record. The card
+	// is back where the drop found it with nothing running, so without this the
+	// return is indistinguishable from a drop that never happened (SC-5878).
+	// Populated by the explicit field copy in internal/board/compose.go.
+	DeployQueueAbandoned string `json:"deployQueueAbandoned,omitempty"`
 	// RunningStage names another stage of a FAILED card's ticket whose own
 	// newest marker is a start — the run the card's single (stage, state) pair
 	// cannot show. The viewer joins it into the liveness question so a red card

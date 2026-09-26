@@ -36,15 +36,16 @@ type fsmDoc struct {
 		IfNothingHappens string `json:"if_nothing_happens"`
 	} `json:"states"`
 	Events []struct {
-		Name      string   `json:"name"`
-		Src       []string `json:"src"`
-		Dst       string   `json:"dst"`
-		Actor     string   `json:"actor"`
-		Marker    string   `json:"marker"`
-		Where     string   `json:"where"`
-		Guard     string   `json:"guard"`
-		Doc       string   `json:"doc"`
-		MovesItem *bool    `json:"moves_item"`
+		Name         string   `json:"name"`
+		Src          []string `json:"src"`
+		Dst          string   `json:"dst"`
+		Actor        string   `json:"actor"`
+		Marker       string   `json:"marker"`
+		Where        string   `json:"where"`
+		Guard        string   `json:"guard"`
+		Doc          string   `json:"doc"`
+		MovesItem    *bool    `json:"moves_item"`
+		DstIsDerived bool     `json:"dst_is_derived"`
 	} `json:"events"`
 	Unclassified struct {
 		Markers []string `json:"markers"`
@@ -80,6 +81,7 @@ func TestPipelineFSM_MarkersExist(t *testing.T) {
 		DeployStartedHeader, DeployedHeader, DeployFailedHeader,
 		PRReviewStartedHeader, PRFixStartedHeader, PRReviewFailedHeader, PRReviewPassedHeader,
 		DeployFixStartedHeader,
+		DeployQueuedHeader, DeployQueueAbandonedHeader,
 		PlanningOutageHeader, ImplementationOutageHeader, ReviewOutageHeader, DeployOutageHeader,
 		PlanCommentHeader, CloseFailedHeader, RelatedStartedHeader, RelatedHeader,
 		ShippedPartialHeader, BugVerdictHeader, BugVerifyHeader, PipelineStartedHeader, HandoffCheckUnreadableHeader,
@@ -176,12 +178,13 @@ func TestPipelineFSM_ReviewedGuardsTheCheckoutAgainstTheImplementationContainer(
 			continue
 		}
 		found = true
-		require.Equal(t, []string{"reviewed"}, e.Src)
+		assert.Contains(t, e.Src, "reviewed")
 		assert.Equal(t, "reviewed", e.Dst, "a deferred launch moves nothing")
 		require.NotNil(t, e.MovesItem)
 		assert.False(t, *e.MovesItem, "it must declare moves_item: false")
 		assert.Empty(t, e.Marker, "the absence of a marker IS the behaviour")
 		assert.Contains(t, e.Where, "awaitCheckoutFree", "name the code that defers")
+		assert.Contains(t, e.Where, "deploy_entry.go", "this route is the CLI's own silent one (SC-5878)")
 	}
 	assert.True(t, found, "deploy-launch-deferred is missing from the document")
 
@@ -198,6 +201,54 @@ func TestPipelineFSM_ReviewedGuardsTheCheckoutAgainstTheImplementationContainer(
 		"the document's budget must be the code's budget")
 	assert.Equal(t, 15*time.Minute, DeployCheckoutWaitBound,
 		"the code's budget must be the document's budget")
+}
+
+// SC-5878: the board's own hold is recorded and moves the item, which is the
+// opposite of the CLI route's silence — so the document has to carry both, and
+// `human fsm where` has to be able to name a queued deploy.
+func TestPipelineFSM_AQueuedDeployIsRecordedAndWithdrawn(t *testing.T) {
+	doc := loadFSMDoc(t)
+
+	type ev struct {
+		src          []string
+		dst          string
+		actor        string
+		marker       string
+		where        string
+		dstIsDerived bool
+	}
+	byName := map[string]ev{}
+	for _, e := range doc.Events {
+		byName[e.Name] = ev{e.Src, e.Dst, e.Actor, e.Marker, e.Where, e.DstIsDerived}
+	}
+
+	var queued struct{ holds, ifNothing string }
+	for _, s := range doc.States {
+		if s.Name == "deploy-queued" {
+			queued.holds, queued.ifNothing = s.Holds, s.IfNothingHappens
+		}
+	}
+	require.NotEmpty(t, queued.holds, "the document must declare a deploy-queued state")
+	assert.Contains(t, queued.ifNothing, "DeployCheckoutWaitBound")
+	assert.Contains(t, queued.ifNothing, "StuckRunningGrace")
+
+	entry, ok := byName["deploy-queued-behind-checkout"]
+	require.True(t, ok, "deploy-queued-behind-checkout is missing from the document")
+	assert.Equal(t, DeployQueuedHeader, entry.marker)
+	assert.Equal(t, "deploy-queued", entry.dst)
+	assert.Equal(t, "user", entry.actor)
+
+	abandoned, ok := byName["deploy-queue-abandoned"]
+	require.True(t, ok, "deploy-queue-abandoned is missing from the document")
+	assert.Equal(t, DeployQueueAbandonedHeader, abandoned.marker)
+	assert.ElementsMatch(t, []string{"deploy-queued"}, abandoned.src)
+	assert.Contains(t, abandoned.where, "abandonStrandedQueuedDeploy")
+	assert.True(t, abandoned.dstIsDerived, "the withdrawal's destination is computed, not fixed")
+
+	for _, name := range []string{"stale-base-conflict", "deploy-failed"} {
+		assert.Contains(t, byName[name].src, "deploy-queued",
+			"%s can fire from a released hold, so the document must say so", name)
+	}
 }
 
 // SC-5793: every planning start classifies the ticket's pipeline first, and the

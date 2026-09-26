@@ -1291,9 +1291,22 @@ func (d BoardTransitionDeps) openDraftPRAndReview(ctx context.Context, pmKey str
 	// the push, and FreshenBranch moving the local branch ref — and the
 	// implementation container may still be working in it. Refusing is not an
 	// option here (nothing re-drives a reviewed card into the done stage), so the
-	// stage waits; past the bound it abandons the launch without a marker, since
-	// a container hung that long is the stuck-running sweep's to answer (SC-5691).
-	if err := d.awaitCheckoutFree(ctx, pmKey); err != nil {
+	// stage waits — and it WRITES the wait down. The board derives a card from
+	// ticket markers alone, so a held launch that recorded nothing rendered as a
+	// bounce back to a finished review and let a re-drop queue a second deploy
+	// (SC-5878). Giving up at the bound withdraws the record instead of redding
+	// the done stage, which remains SC-5691's rule: a container hung that long is
+	// the stuck-running sweep's to answer.
+	holder := ""
+	if err := d.awaitCheckoutFree(ctx, pmKey, func(h string) {
+		holder = h
+		d.recordDeployQueued(ctx, pmKey, h)
+	}); err != nil {
+		if stderrors.Is(err, ErrDeployCheckoutBusy) {
+			d.recordDeployQueueAbandoned(ctx, pmKey,
+				holder+" did not release the checkout within "+DeployCheckoutWaitBound.String(),
+				holder, DeployCheckoutWaitBound.String())
+		}
 		d.Logger.Warn().Err(err).Str("pm", pmKey).
 			Msg("board PR loop: abandoning the deploy launch; the checkout is still held")
 		return err
@@ -1646,6 +1659,58 @@ func (d BoardTransitionDeps) grantDeployFixRound(ctx context.Context, pmKey stri
 	}); err != nil {
 		d.Logger.Warn().Err(err).Str("pm", pmKey).
 			Msg("board deploy retry: could not record the re-armed fix round; the retry proceeds on the spent budget")
+	}
+}
+
+// deployQueuedBody and deployQueueAbandonedBody are FIXED sentences: everything a
+// reader machine-reads travels as a named field, so the prose can never become a
+// format with readers it does not have (the rule deployRetryGrantBody states, and
+// the SC-5592 forgery this repo already paid for).
+const deployQueuedBody = "the deploy is queued: this ticket's own container still holds the checkout the deploy pushes from. " +
+	"Nothing has been pushed. It starts on its own as soon as that container ends."
+const deployQueueAbandonedBody = "the queued deploy was given up. Nothing was pushed and nothing failed — " +
+	"drop the card on Deploy again once the container has ended."
+
+// deployQueuedMarker composes the accept-time record and its field order.
+func deployQueuedMarker(holder string) (marker.Marker, []string) {
+	return marker.Marker{
+		Type:   MarkerDeployQueued,
+		Fields: fields("waiting", holder, "bound", DeployCheckoutWaitBound.String()),
+		Body:   deployQueuedBody,
+	}, []string{"waiting", "bound"}
+}
+
+// deployQueueAbandonedMarker composes the withdrawal. reason is ALWAYS composed by
+// the daemon and always one line; agent and waited are empty on the durable path,
+// which knows neither.
+func deployQueueAbandonedMarker(reason, agent, waited string) (marker.Marker, []string) {
+	f := fields("reason", strings.Join(strings.Fields(reason), " "))
+	if agent != "" {
+		f["agent"] = agent
+	}
+	if waited != "" {
+		f["waited"] = waited
+	}
+	return marker.Marker{Type: MarkerDeployQueueAbandoned, Fields: f, Body: deployQueueAbandonedBody},
+		[]string{"reason", "agent", "waited"}
+}
+
+// recordDeployQueued and recordDeployQueueAbandoned post the pair best-effort, for
+// grantDeployFixRound's reason: a tracker that refuses a comment must not refuse
+// the deploy. A lost record costs the card its badge for this wait, never the work.
+func (d BoardTransitionDeps) recordDeployQueued(ctx context.Context, pmKey, holder string) {
+	m, order := deployQueuedMarker(holder)
+	if err := postMarker(ctx, d.Commenter, pmKey, m, order...); err != nil {
+		d.Logger.Warn().Err(err).Str("pm", pmKey).Str("agent", holder).
+			Msg("board PR loop: could not record the queued deploy; the wait proceeds unrecorded")
+	}
+}
+
+func (d BoardTransitionDeps) recordDeployQueueAbandoned(ctx context.Context, pmKey, reason, agent, waited string) {
+	m, order := deployQueueAbandonedMarker(reason, agent, waited)
+	if err := postMarker(ctx, d.Commenter, pmKey, m, order...); err != nil {
+		d.Logger.Warn().Err(err).Str("pm", pmKey).
+			Msg("board PR loop: could not record the abandoned deploy queue; the card keeps the queued record until the reconcile pass retires it")
 	}
 }
 

@@ -39,7 +39,7 @@ func (d Document) StateNames() []string {
 // placement, in document order.
 //
 // Usually one. Two placements are genuinely many-to-one — implementation/running
-// covers seven states and done/running five — because the board shows a stage
+// covers seven states and done/running six — because the board shows a stage
 // running and the machine distinguishes the phases inside it. A caller resolving
 // a real item has to narrow those by other evidence, or say it could not.
 //

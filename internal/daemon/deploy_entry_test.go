@@ -534,6 +534,32 @@ func TestStartDeploy_refusesWhileTheImplementationContainerHoldsTheCheckout(t *t
 	}
 }
 
+// AD3: the CLI's `human deploy` route posts NOTHING when it refuses on the
+// checkout interlock — no started marker, no failure, and no queued record
+// either. Unlike a board drop (which accepts and queues behind the checkout,
+// SC-5878), the CLI route has no reconcile pass watching over an in-process
+// wait, so recording a queue it can never withdraw would strand the card
+// exactly the way a lost daemon restart would. human-autofix-skill.md and
+// human-security-fix-skill.md both restate "nothing failed, no marker is
+// posted, and the card is not red" for this route, and the two assertions
+// above alone would still pass if the route grew a queued marker: this pins
+// silence, not just the absence of the two other headers.
+func TestStartDeploy_CheckoutBusyStillPostsNothing(t *testing.T) {
+	shortCheckoutWait(t)
+	c := &fakeCommenter{comments: reviewedThread()}
+	p := &fakeDeployer{}
+	deps, l := reviewableDeps(c, p)
+	deps.LiveAgents = liveAgents("board-SC-1-implementation")
+
+	_, err := runStartDeploy(t, deps, StartDeployRequest{PMKey: "SC-1", Branch: "autofix/sc-1"})
+
+	require.Error(t, err)
+	assert.True(t, stderrors.Is(err, ErrDeployCheckoutBusy))
+	assert.Zero(t, p.call)
+	assert.Zero(t, l.calls)
+	assert.Empty(t, c.added, "the CLI route must post nothing at all on this refusal, not merely omit the started/failed headers")
+}
+
 // --ready overrides the machine review, not the checkout: the engine it runs
 // writes to the same tree the implementation container holds.
 func TestStartDeploy_readyDoesNotOverrideTheCheckoutInterlock(t *testing.T) {

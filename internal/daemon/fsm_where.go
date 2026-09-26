@@ -194,7 +194,7 @@ func BuildWhere(doc pipelinefsm.Document, key string, comments []tracker.Comment
 //
 // The board placement decides it outright for sixteen of the eighteen
 // placements the machine declares. Two are genuinely many-to-one —
-// implementation/running covers seven states and done/running five — because
+// implementation/running covers seven states and done/running six — because
 // the board shows that a stage is running while the machine distinguishes the
 // phases inside it. Those are narrowed by the newest marker in the winning
 // stage, which is the record of which phase last reported.
