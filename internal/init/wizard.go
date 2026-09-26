@@ -293,10 +293,6 @@ var DefaultProxyDomains = []string{
 	"anthropic.com",
 }
 
-// goFeatureKey is the devcontainer feature that installs Go. Named once: the
-// allowlist, the bootstrap command table and the version pin all key off it.
-const goFeatureKey = "ghcr.io/devcontainers/features/go:1"
-
 // StackToLspBinary maps devcontainer feature keys to LSP binary names
 // from LspRegistry. Used to auto-select LSP plugins when language
 // stacks are already chosen in the devcontainer step.

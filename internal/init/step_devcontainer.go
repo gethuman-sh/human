@@ -141,6 +141,12 @@ const humanFeatureKey = "ghcr.io/gethuman-sh/treehouse/human:1"
 const claudeFeatureKey = "ghcr.io/anthropics/devcontainer-features/claude-code:1"
 const nodeFeatureKey = "ghcr.io/devcontainers/features/node:1"
 
+// goFeatureKey is the devcontainer feature that installs Go. Named once: the
+// allowlist, the bootstrap command table and the version pin all key off it.
+// Colocated with the other feature-key consts above (SC-5879 review) rather
+// than living alone in wizard.go.
+const goFeatureKey = "ghcr.io/devcontainers/features/go:1"
+
 // ensureHumanFeature reads an existing devcontainer.json and adds the human
 // feature if it is missing. Returns hints if the file was updated.
 func ensureHumanFeature(w io.Writer, fw claude.FileWriter) ([]string, error) {
