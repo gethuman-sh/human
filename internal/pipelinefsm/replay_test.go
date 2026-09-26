@@ -410,3 +410,69 @@ func TestReplay_AMergeAfterAFailedDeployIsDescribed(t *testing.T) {
 	assert.Equal(t, "merged", shipped.State)
 	assert.True(t, shipped.Terminal)
 }
+
+// The minimal case of SC-5839: after a failed first attempt the retry's
+// [human:implementation-started] fits start-implementation (implementing) and
+// start-fix-run (preflight), and only the preflight branch leads on to
+// challenging, where the not-a-bug record is described. Replay commits to the
+// alphabetically first branch, so the set of states the history is CONSISTENT
+// with is what a gate has to read.
+func TestReplay_ARetriedFixRunKeepsBothBranchesOfTheAmbiguity(t *testing.T) {
+	doc, err := Load()
+	require.NoError(t, err)
+
+	r := doc.Replay([]string{"implementation-started", "implementation-failed", "implementation-started", "bug-verdict"})
+
+	require.Empty(t, r.Refused)
+	assert.Equal(t, "implementing", r.State, "the single-state walk still commits, and still to this branch")
+	assert.Contains(t, r.States, "challenging", "the branch the not-a-bug record leaves must survive the walk")
+	assert.False(t, doc.Accepts(r.State, "no-fix-needed"), "the pinned branch alone refuses it — the defect")
+	assert.True(t, doc.Admits(r, "no-fix-needed"), "some reading of the history allows it, so the gate must")
+}
+
+// The widening is bounded by the same vocabulary as before: a marker no branch
+// has an edge for is still refused, or the fix would be a blanket amnesty.
+func TestReplay_AdmitsIsNotABlanketAmnesty(t *testing.T) {
+	doc, err := Load()
+	require.NoError(t, err)
+
+	r := doc.Replay([]string{"implementation-started", "implementation-failed", "implementation-started", "bug-verdict"})
+
+	assert.False(t, doc.Admits(r, "deployed"), "no branch of this history describes a merge")
+}
+
+// A destination the document declines to name is not a position, so there is
+// nothing to judge a marker against and the gate must not refuse.
+func TestReplay_AdmitsEverythingWhenTheDestinationIsUnknown(t *testing.T) {
+	d := replayMachine()
+
+	r := d.Replay([]string{"started", "asked", "resumed"})
+
+	require.True(t, r.DestinationUnknown())
+	assert.True(t, d.Admits(r, "verdict"))
+}
+
+// A marker no reading of the history can account for is the write gate's
+// question, and Refused is not it: once replay commits to one branch, a marker
+// only the other branch allows lands in Refused and would switch the gate off
+// for the rest of the ticket (SC-5839).
+func TestReplay_UnaccountedIsRefusedJudgedAgainstEveryBranch(t *testing.T) {
+	doc, err := Load()
+	require.NoError(t, err)
+
+	fine := doc.Replay([]string{"implementation-started", "implementation-failed", "implementation-started", "bug-verdict", "no-fix-needed"})
+	assert.NotEmpty(t, fine.Refused, "the pinned branch cannot account for the record")
+	assert.Empty(t, fine.Unaccounted, "but another branch can, so the history has not left the machine")
+
+	off := doc.Replay([]string{"deployed"})
+	assert.NotEmpty(t, off.Unaccounted, "a merge on a fresh ticket fits no reading at all")
+}
+
+// Reachable is what a reader needs to NAME where an item might be: each branch
+// plus everything reachable from it without leaving a trace on the ticket.
+func TestReachable_ExpandsEveryBranchThroughItsSilentMoves(t *testing.T) {
+	d := replayMachine()
+
+	assert.Equal(t, []string{"checking", "working"}, d.Reachable([]string{"working"}))
+	assert.Equal(t, []string{"checking", "filed", "working"}, d.Reachable([]string{"filed", "working"}))
+}
