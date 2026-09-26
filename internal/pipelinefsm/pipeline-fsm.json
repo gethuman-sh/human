@@ -612,7 +612,7 @@
       "marker": "[human:no-fix-needed]",
       "state_key": "stage.challenge challenge=upheld, stage.implementation exit=done",
       "prompt": "human-autofix-skill.md Step 3a",
-      "doc": "The skeptic could not refute the not-a-bug or undetermined verdict, so it stands and the run ends without a code change. The challenge runs once — a verdict that survives it is not re-challenged."
+      "doc": "The skeptic could not refute the not-a-bug or undetermined verdict, so it stands and the run ends without a code change. The challenge runs once — a verdict that survives it is not re-challenged. The marker is posted BEFORE the ticket is closed: it is what the board reads for the resolved column and what `reopen-fix` re-opens from, while the closed status is bookkeeping after it. The other order left a closed ticket with no record when the post was refused (SC-5839)."
     },
     {
       "name": "challenge-refutes",
@@ -692,7 +692,7 @@
       "runs": "human-executor",
       "marker": "[human:implementation-started]",
       "where": "board_transition.go launchForwardStage / isReworkTransition / isBuildRetry / isQueuedLaunch",
-      "doc": "The plan-executing path. From reviewed it is the rework loop — a failing review verdict sends the item back to be rebuilt with the findings."
+      "doc": "The plan-executing path. From reviewed it is the rework loop — a failing review verdict sends the item back to be rebuilt with the findings. It shares its marker and four of its sources (planned, stopped, queued, substrate-down) with start-fix-run and fix-resumed-instead-of-planning, so a marker thread cannot say which move a second [human:implementation-started] recorded — only the ticket's kind can, and a replay does not have it. A write gate must therefore judge a later marker against EVERY state the history is consistent with, not the one a replay pinned: judging against the pinned branch refused the [human:no-fix-needed] record of every retried fix run (SC-5839, internal/tracker/local/pipeline.go admitMarker)."
     },
     {
       "name": "handoff-posted",

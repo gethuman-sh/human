@@ -412,3 +412,28 @@ func TestPrompts_BudgetSpentStopCarriesTheBlockerFields(t *testing.T) {
 		require.Contains(t, body, `"blocker":{"kind":`, "%s: the stage record must carry the blocker object", name)
 	}
 }
+
+// A no-fix terminal writes its record BEFORE it closes the ticket. The other
+// order left a closed ticket with no trace of why whenever the post was refused,
+// and the marker — not the closed status — is what the board reads for the
+// resolved column and what a person re-opens from (SC-5839). Both fix pipelines
+// state the rule, so both are checked: one of them drifting back is exactly the
+// failure this pins.
+func TestPrompts_TheNoFixRecordIsPostedBeforeTheTicketIsClosed(t *testing.T) {
+	for _, name := range []string{"human-autofix-skill.md", "human-security-fix-skill.md"} {
+		skill := readEmbed(t, name)
+
+		post := strings.Index(skill, "marker post <BUG_KEY> no-fix-needed --field verdict=not-a-bug")
+		if post < 0 {
+			post = strings.Index(skill, "marker post <SEC_KEY> no-fix-needed --field verdict=not-a-bug")
+		}
+		require.Positive(t, post, "%s no longer posts the not-a-bug terminal marker", name)
+
+		closeIdx := strings.Index(skill, "human close <")
+		require.Positive(t, closeIdx, "%s no longer closes the ticket on a not-a-bug terminal", name)
+
+		require.Less(t, post, closeIdx,
+			"%s tells the run to close the ticket before posting [human:no-fix-needed] — "+
+				"a refused record then leaves a closed ticket with no trace (SC-5839)", name)
+	}
+}
