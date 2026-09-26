@@ -26,6 +26,7 @@ func TestDecideDispatch_staleDaemonRefusesOnlyForwardedCommands(t *testing.T) {
 		{"daemon", "start"},
 		{"--tracker", "work", "daemon", "stop"},
 		{"doctor"},
+		{"doctor", "toolchain"},
 		{"--help"},
 		{"-h"},
 		{"help"},
