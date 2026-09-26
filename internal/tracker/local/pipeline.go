@@ -2,6 +2,7 @@ package local
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 
@@ -39,7 +40,11 @@ var fsmDoc = sync.OnceValues(func() (pipelinefsm.Document, error) {
 //   - a marker the grammar rejects (unknown name shape, missing required field)
 //   - the same *-started or *-failed marker twice in a row, which is a stage
 //     declared started or dead twice for one event (SC-3857)
-//   - a marker the state machine accepts nowhere the item can currently be
+//   - a marker the state machine accepts from no state the history is consistent
+//     with. Consistent, not pinned: a second [human:implementation-started] fits
+//     both the plan-executing and the self-planning edge, and judging a later
+//     marker against the branch replay happened to pick refused the one record
+//     that ends a retried fix run cleanly (SC-5839)
 //   - nothing, when the history is already off the machine: refusing then would
 //     make a ticket the daemon lost track of unrecoverable, so it is logged and
 //     let through
@@ -66,17 +71,33 @@ func (c *Client) admitMarker(ctx context.Context, number int64, key string, m ma
 		return nil
 	}
 	replay := doc.Replay(history)
-	if len(replay.Refused) > 0 {
-		log.Warn().Str("key", key).Str("type", m.Type).Str("first_refused", replay.Refused[0].Marker).
+	if len(replay.Unaccounted) > 0 {
+		log.Warn().Str("key", key).Str("type", m.Type).Str("first_refused", replay.Unaccounted[0].Marker).
 			Msg("strict local tracker: history already left the machine; admitting the marker")
 		return nil
 	}
-	if replay.DestinationUnknown() || doc.Accepts(replay.State, m.Type) {
+	if doc.Admits(replay, m.Type) {
 		return nil
 	}
-	return errors.WithDetails("strict local tracker refused a marker the state machine does not allow here",
-		"key", key, "type", m.Type, "state", replay.State, "could_be", strings.Join(replay.Blur, ","),
-		"allowed", strings.Join(allowedMarkers(doc, replay.Blur), ","))
+	return refusalError(doc, key, m.Type, replay)
+}
+
+// refusalError says what was refused, where the history could have the item, and
+// what the machine would have accepted there — in the message TEXT, because a
+// poster reads only that: the structured details never reach a CLI caller, so a
+// refusal that named nothing left the agent nothing to act on (SC-5839).
+func refusalError(doc pipelinefsm.Document, key, markerType string, replay pipelinefsm.Replay) error {
+	where := doc.Reachable(replay.States)
+	allowed := allowedMarkers(doc, where)
+	accepts := "no marker at all"
+	if len(allowed) > 0 {
+		accepts = strings.Join(allowed, ", ")
+	}
+	return errors.WithDetails(fmt.Sprintf(
+		"strict local tracker refused [human:%s]: this ticket's history puts it at %s, which accepts %s",
+		markerType, strings.Join(where, " or "), accepts),
+		"key", key, "type", markerType, "state", replay.State,
+		"could_be", strings.Join(where, ","), "allowed", strings.Join(allowed, ","))
 }
 
 func isStageEvent(markerType string) bool {
@@ -94,10 +115,10 @@ func isUnclassified(doc pipelinefsm.Document, markerType string) bool {
 
 // allowedMarkers names what could have been posted instead, so a refusal is
 // something the poster can act on rather than a closed door.
-func allowedMarkers(doc pipelinefsm.Document, blur []string) []string {
+func allowedMarkers(doc pipelinefsm.Document, states []string) []string {
 	seen := map[string]bool{}
 	var out []string
-	for _, from := range blur {
+	for _, from := range states {
 		for _, e := range doc.Out(from) {
 			for _, part := range strings.Split(e.Marker, "|") {
 				t := pipelinefsm.MarkerType(part)
