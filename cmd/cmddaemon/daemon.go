@@ -4249,7 +4249,7 @@ func advancePRLoopFunc(ctx context.Context, ds *daemonState, diagnose daemon.Boa
 			fixAnchor, _ = daemon.LatestMarkerTime(comments, daemon.PRFixStartedHeader)
 		}
 
-		verdict, reviewHead, findings, verdictRecorded, verdictFresh := readPRReviewVerdict(ctx, project, pmKey, reviewAnchor, logger)
+		verdict, reviewHead, findings, reviewExit, reviewSummary, verdictRecorded, verdictFresh := readPRReviewVerdict(ctx, project, pmKey, reviewAnchor, logger)
 		exit, options, summary, fixHead, exitRecorded, exitFresh := readPRFixReport(ctx, project, pmKey, fixAnchor, logger)
 		// The record is written from the same reads the loop decides on, so what
 		// it holds is exactly what the loop saw — and only a report confirmed as
@@ -4272,6 +4272,8 @@ func advancePRLoopFunc(ctx context.Context, ds *daemonState, diagnose daemon.Boa
 			ReviewVerdict:  verdict,
 			ReviewRecorded: verdictRecorded,
 			ReviewHead:     reviewHead,
+			ReviewExit:     reviewExit,
+			ReviewSummary:  reviewSummary,
 			ReviewFinding:  finding,
 			ReviewClass:    class,
 			ReviewStale:    verdictRecorded && !verdictFresh,

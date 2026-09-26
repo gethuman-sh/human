@@ -118,7 +118,7 @@ The daemon loops you against the fixer until you record `approved` (or the loop 
 
 ```bash
 human state set <WORK_KEY> stage.pr-review --json --body-file - <<'EOF'
-{"exit":"done",
+{"exit":"<done|outage>",
  "verdict":"<approved|changes-requested|unreviewable>",
  "head":"<the branch-tip SHA you reviewed>",
  "blocking":<count of blocking findings>,
@@ -130,6 +130,7 @@ EOF
 - `approved` — nothing blocks; safe to proceed toward merge.
 - `changes-requested` — at least one blocking finding; the fixer runs next, then you review again.
 - `unreviewable` — the branch/diff could not be obtained (unresolved branch, no diff). Not a synonym for a clean review.
+- `outage` (exit, not a verdict) — the substrate you needed was unreachable (the tracker, the credential store, the model API), so nothing about the PR is wrong and nothing was judged. Record `"exit":"outage"`, name what was unreachable in `summary`, and record no `verdict`. The daemon posts `[human:deploy-outage]`, the card reads paused, **no round is charged**, and the review is re-driven when the substrate comes back.
 
 Do NOT use `AskUserQuestion` — you cannot interact with a human. Humans review this PR out of band, on their own cadence; you never wait for them.
 

@@ -690,12 +690,14 @@ func deployPhaseFor(card BoardCard, comments []tracker.Comment) string {
 // The count is thread-wide rather than scoped to this attempt, because that is
 // the number EvaluatePRLoop itself acts on against the same bound: a board that
 // disagreed with the loop's own escalation arithmetic would be worse than one
-// that agrees with it.
+// that agrees with it. That number gives back a round an outage interrupted
+// (chargedPRReviewRounds), so the badge counts the rounds that actually ran —
+// the same rounds the bound is spent on (SC-5627).
 func prLoopRoundFor(card BoardCard, comments []tracker.Comment) (round, bound int) {
 	if card.Stage != BoardDoneStage || card.State != BoardRunning || card.DeployPhase == "" {
 		return 0, 0
 	}
-	n := prReviewRounds(comments)
+	n := chargedPRReviewRounds(comments)
 	if n <= 0 {
 		return 0, 0
 	}

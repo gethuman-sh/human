@@ -55,7 +55,7 @@ The daemon bounds this loop with a per-stage budget. If you cannot address a fin
 
 ```bash
 human state set <WORK_KEY> stage.pr-fix --json --body-file - <<'EOF'
-{"exit":"<done|needs-input>",
+{"exit":"<done|needs-input|outage>",
  "head":"<the branch-tip SHA after your commit — the reviewer re-reads this>",
  "addressed":"<what you changed / which findings>",
  "dependents":"<one line per dependent: examined-and-unchanged / examined-and-changed — empty when the change touched no shared thing>",
@@ -72,7 +72,8 @@ EOF
   - **2 or more directions** — the board asks the human, showing exactly your labels.
   - **exactly 1** — the daemon takes it without asking, because one answer is not a choice. Write one only when you mean "do this"; write two when the point is that a human must pick.
   - **none** — the card reds with your `deferred` as the reason (`summary` when `deferred` is empty). That is the right outcome for a fixer that is genuinely stuck, so make it say what you were stuck on; it is all the human gets.
-- There is no `needs-human-work` exit for this step, and no `blocker` object. On a `needs-input` stop your `deferred` leads the decision block (or is the failed marker's reason when you give no options); on the round budget the loop reds the card with a canned headline, or with a one-line fingerprint of the finding when the same one repeated (the file and class, when it was the class that repeated); the reviewer's full findings text never reaches the ticket, but every round's findings and your exit are kept in the daemon's findings record. A finding that genuinely needs a person is a `needs-input` stop with 2+ `options` — the only route that puts the question on the ticket.
+- `outage` — the substrate you needed was unreachable (the tracker, the credential store, the model API), so nothing about the fix is wrong and nothing was attempted. Record `"exit":"outage"` and name what was unreachable in `summary` — that line becomes the card's face. Omit `options`. The daemon posts `[human:deploy-outage]`, the card reads paused, **no round is charged**, and the loop is re-driven when the substrate comes back.
+- There is no `needs-human-work` exit for this step, and no `blocker` object — an unreachable substrate is `outage`, not a blocker. On a `needs-input` stop your `deferred` leads the decision block (or is the failed marker's reason when you give no options); on the round budget the loop reds the card with a canned headline, or with a one-line fingerprint of the finding when the same one repeated (the file and class, when it was the class that repeated); the reviewer's full findings text never reaches the ticket, but every round's findings and your exit are kept in the daemon's findings record. A finding that genuinely needs a person is a `needs-input` stop with 2+ `options` — the only route that puts the question on the ticket.
 
 Do NOT use `AskUserQuestion` — you cannot interact with a human.
 

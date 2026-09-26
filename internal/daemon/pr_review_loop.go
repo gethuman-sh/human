@@ -48,7 +48,8 @@ const MaxSoleDirectionPursuits = 3
 // PR review/fix outcomes the decider branches on. These mirror the vocabulary
 // the human-pr-reviewer and human-pr-fixer prompts record in state, kept here as
 // the single Go-side source of truth. The fixer's needs-input reuses the shared
-// ExitNeedsInput; only "done" advances, everything else is treated as escalate.
+// ExitNeedsInput and either step's outage reuses ExitOutage; "done" advances,
+// an outage waits, everything else is treated as escalate.
 const (
 	PRVerdictApproved     = "approved"
 	PRVerdictChanges      = "changes-requested"
@@ -74,19 +75,27 @@ const (
 	PRActionFix                          // run human-pr-fixer
 	PRActionMerge                        // review is clean — proceed to the CI gate + merge
 	PRActionEscalate                     // stop and leave the card for a human
+	// PRActionOutage parks the card instead of deciding: the step reported the
+	// substrate it needed was unreachable, so nothing about the work is wrong and
+	// nothing was attempted. The done stage's outage marker is posted, no round is
+	// charged, and reconcileOutage re-drives the loop when the substrate returns
+	// (SC-2307's rule, which reached this loop only in SC-5627).
+	PRActionOutage
 )
 
 // NextPRLoopAction is the loop's transition function. `stage` is the step that
 // just finished and `outcome` its recorded field — the reviewer's verdict
-// (approved | changes-requested | unreviewable) or the fixer's exit
-// (done | needs-input). `round` is the number of reviews completed so far and
-// `budget` the maximum (DefaultPRReviewRounds when non-positive).
+// (approved | changes-requested | unreviewable, or outage) or the fixer's exit
+// (done | needs-input | outage). `round` is the number of reviews completed so
+// far and `budget` the maximum (DefaultPRReviewRounds when non-positive).
 //
 // Two safety rules are baked in. An unrecognized outcome escalates rather than
 // proceeds: the loop must never merge on a state it cannot read. And a
 // changes-requested review at the round budget escalates instead of fixing
 // again, so a disagreement the fixer cannot close reaches a human in bounded
-// time rather than looping.
+// time rather than looping. And a step that reported the substrate was
+// unreachable waits rather than escalating: an outage is not a failure and
+// costs no round (SC-2307/SC-5627).
 func NextPRLoopAction(stage PRLoopStage, outcome string, round, budget int, repeated bool) PRLoopAction {
 	if budget <= 0 {
 		budget = DefaultPRReviewRounds
@@ -98,6 +107,8 @@ func NextPRLoopAction(stage PRLoopStage, outcome string, round, budget int, repe
 		switch outcome {
 		case PRVerdictApproved:
 			return PRActionMerge
+		case string(ExitOutage):
+			return PRActionOutage
 		case PRVerdictChanges:
 			if repeated || round >= budget {
 				return PRActionEscalate
@@ -107,10 +118,14 @@ func NextPRLoopAction(stage PRLoopStage, outcome string, round, budget int, repe
 			return PRActionEscalate
 		}
 	case PRStageFix:
-		if outcome == PRFixDone {
+		switch outcome {
+		case PRFixDone:
 			return PRActionReview
+		case string(ExitOutage):
+			return PRActionOutage
+		default: // needs-input, or unclassifiable
+			return PRActionEscalate
 		}
-		return PRActionEscalate // needs-input, or unclassifiable
 	default:
 		return PRActionEscalate
 	}
@@ -410,15 +425,19 @@ func classRepeated(comments []tracker.Comment, classKey string) bool {
 }
 
 // PRReviewRounds is the number of review rounds the thread has started — the
-// round a reviewer's report belongs to, for the durable findings record.
+// round a reviewer's report belongs to, for the durable findings record. The
+// raw started count, deliberately — see prReviewRounds.
 func PRReviewRounds(comments []tracker.Comment) int { return prReviewRounds(comments) }
 
 // PRLoopNumber is the pull request the loop is running on, 0 when the thread
 // names none.
 func PRLoopNumber(comments []tracker.Comment) int { return prLoopNumber(comments) }
 
-// prReviewRounds counts completed review rounds — one per pr-review-started
-// marker — the value the decider bounds against DefaultPRReviewRounds.
+// prReviewRounds counts review rounds STARTED — one per pr-review-started
+// marker. It is the round's identity (the badge's number and the findings
+// record's round column), not the budget's: what the decider bounds against
+// DefaultPRReviewRounds is chargedPRReviewRounds, which gives back a round an
+// outage interrupted.
 func prReviewRounds(comments []tracker.Comment) int {
 	n := 0
 	for _, c := range comments {
@@ -429,15 +448,38 @@ func prReviewRounds(comments []tracker.Comment) int {
 	return n
 }
 
+// chargedPRReviewRounds counts the review rounds the loop's budget has actually
+// been charged for: prReviewRounds MINUS every round the done stage's outage
+// marker interrupted.
+//
+// The refund is not bookkeeping niceness. A round is charged at DISPATCH — the
+// pr-review-started marker is posted before the reviewer launches — and the
+// uncharged outage re-drive re-enters the WHOLE done stage (isDeployRetry →
+// runDoneStage), so it posts a fresh started marker on every reconcile tick.
+// Without this a substrate down for eight ticks spends the entire
+// DefaultPRReviewRounds budget on rounds that attempted nothing and the card reds
+// anyway: SC-2307's "an outage costs time and nothing else" broken by the counter
+// rather than by the classifier, the same way SC-5592 found it broken for the
+// deploy-fix bound.
+//
+// Deliberately NOT folded into prReviewRounds, whose value is also the `round`
+// column of the durable findings record (PRReviewRounds → recordReviewRound):
+// that column is part of the record's identity (UNIQUE(project,key,pr,round,
+// file,slug) with ON CONFLICT DO UPDATE), so a refunded number would overwrite an
+// earlier round's rows instead of adding this one's.
+func chargedPRReviewRounds(comments []tracker.Comment) int {
+	return roundsNetOfOutage(comments, PRReviewStartedHeader)
+}
+
 // PRLoopOutcome is what the loop step that just finished left behind: the
-// reviewer's verdict or the fixer's exit, plus whether either was RECORDED AT
-// ALL. That last distinction is the point of the type. An agent that crashed
-// before writing anything and an agent that deliberately reported something the
-// daemon cannot classify both escalate, but they are different failures and the
-// ticket must be able to say which — the same distinction mayRelaunch already
-// draws for ordinary stages (board_retry.go). Carried as one value rather than
-// six positional arguments, which is how the recorded/unrecorded pairs stayed
-// impossible to tell apart.
+// reviewer's verdict and exit, or the fixer's exit, plus whether either was
+// RECORDED AT ALL. That last distinction is the point of the type. An agent
+// that crashed before writing anything and an agent that deliberately reported
+// something the daemon cannot classify both escalate, but they are different
+// failures and the ticket must be able to say which — the same distinction
+// mayRelaunch already draws for ordinary stages (board_retry.go). Carried as
+// one value rather than six positional arguments, which is how the
+// recorded/unrecorded pairs stayed impossible to tell apart.
 //
 // Agent and ErrorType identify the exited run so the escalation can carry a real
 // diagnosis. Both are empty when the loop is re-driven by the durable reconcile
@@ -450,9 +492,18 @@ type PRLoopOutcome struct {
 	// local-ref review model the reviewer reviews the fixer's LOCAL commit, so
 	// this is the local branch tip, not origin's — the pushed head is stale by
 	// design until the daemon ships the branch at merge (SC-1760).
-	ReviewHead  string
-	FixExit     string
-	FixRecorded bool
+	ReviewHead string
+	// ReviewExit is the reviewer's exit-contract exit, distinct from its verdict.
+	// The reviewer records `exit` and `verdict` in one report, and on an outage it
+	// records the exit and NO verdict at all — read as a verdict alone that is an
+	// empty verdict, which escalates (SC-5627).
+	ReviewExit string
+	// ReviewSummary is the reviewer's one line. It is what an OUTAGE has instead
+	// of a verdict, so it is what names the unreachable substrate on the card —
+	// the same role FixSummary plays for the fixer (SC-5592's lesson, SC-5627).
+	ReviewSummary string
+	FixExit       string
+	FixRecorded   bool
 	// FixHead is the branch-tip SHA the fixer left behind. When it equals the
 	// head the preceding review already read, the fixer produced no new commit
 	// and a re-review would only reproduce the same findings — the convergence
@@ -528,6 +579,20 @@ func (o PRLoopOutcome) stepStale(stage PRLoopStage) bool {
 	}
 }
 
+// outageReason is the one line the step that just finished offered about what it
+// could not reach — the card's face. Empty falls back to pausedOutageMarker's
+// generic phrase rather than inventing one.
+func (o PRLoopOutcome) outageReason(stage PRLoopStage) string {
+	switch stage {
+	case PRStageReview:
+		return o.ReviewSummary
+	case PRStageFix:
+		return o.FixSummary
+	default:
+		return ""
+	}
+}
+
 // EvaluatePRLoop bridges the recorded board state to the decider: it reads which
 // loop step last ran (from the markers) and how many review rounds have
 // completed, pairs the step with the outcome that step recorded — the reviewer's
@@ -554,6 +619,11 @@ func (o PRLoopOutcome) stepStale(stage PRLoopStage) bool {
 // merges (SC-2307/AD3); any other preceding verdict is a genuine
 // non-convergence and still escalates rather than re-reviewing forever
 // (SC-1760).
+//
+// Third, the exit contract's outage: the reviewer records its exit beside its
+// verdict, so an outage there is read from the exit, and either step's outage
+// returns PRActionOutage — the card parks, uncharged, rather than escalating
+// (SC-5627).
 func EvaluatePRLoop(comments []tracker.Comment, outcome PRLoopOutcome) PRLoopAction {
 	stage := LatestPRLoopStage(comments)
 	if outcome.stepStale(stage) {
@@ -562,11 +632,16 @@ func EvaluatePRLoop(comments []tracker.Comment, outcome PRLoopOutcome) PRLoopAct
 	var step string
 	switch stage {
 	case PRStageReview:
+		// The reviewer records exit AND verdict; on an outage it records the exit
+		// and no verdict, so there the exit is the step's outcome (SC-5627).
 		step = outcome.ReviewVerdict
+		if outcome.ReviewExit == string(ExitOutage) {
+			step = outcome.ReviewExit
+		}
 	case PRStageFix:
 		step = outcome.FixExit
 	}
-	action := NextPRLoopAction(stage, step, prReviewRounds(comments), DefaultPRReviewRounds, outcome.FindingRepeated)
+	action := NextPRLoopAction(stage, step, chargedPRReviewRounds(comments), DefaultPRReviewRounds, outcome.FindingRepeated)
 	if stage == PRStageFix && action == PRActionReview && outcome.headStalled() {
 		if outcome.ReviewVerdict == PRVerdictApproved {
 			return PRActionMerge

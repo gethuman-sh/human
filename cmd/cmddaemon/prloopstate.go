@@ -59,22 +59,33 @@ var (
 // accidentally act on them. The caller (advancePRLoopFunc) maps a recorded-
 // but-not-fresh read to PRLoopOutcome.ReviewStale, which the pure decider
 // escalates on rather than trusting.
-func readPRReviewVerdict(ctx context.Context, project, pmKey string, notBefore time.Time, logger zerolog.Logger) (verdict, head, findings string, recorded, fresh bool) {
+//
+// exit and summary are the exit contract's, read exactly as readDeployFixReport
+// reads them. They are not a duplicate of the verdict: the reviewer records both
+// in one report, and a reviewer that could not reach the substrate records
+// exit "outage" and NO verdict — read as a verdict alone that is an empty
+// verdict, which the loop escalates on instead of parking the card (SC-5627).
+// summary is what the outage has instead of a verdict, so it is what names the
+// unreachable substrate on the card (SC-5592's lesson).
+func readPRReviewVerdict(ctx context.Context, project, pmKey string, notBefore time.Time, logger zerolog.Logger) (verdict, head, findings, exit, summary string, recorded, fresh bool) {
 	var v struct {
 		Verdict  string `json:"verdict"`
 		Head     string `json:"head"`
 		Findings string `json:"findings"`
+		Exit     string `json:"exit"`
+		Summary  string `json:"summary"`
 	}
 	recorded, fresh = readStageReportSettled(ctx, project, pmKey, "stage.pr-review", notBefore, &v, logger)
-	return v.Verdict, v.Head, v.Findings, recorded, fresh
+	return v.Verdict, v.Head, v.Findings, v.Exit, v.Summary, recorded, fresh
 }
 
 // readPRFixReport loads the fixer's stage.pr-fix report: its exit, the optional
-// enumerated directions it recorded on needs-input, a one-line context (deferred
-// comments, else the summary) for the options block, the branch-tip SHA it left
-// behind (head — fed to the loop's convergence guard), plus whether a report was
-// found at all. Absent fields stay zero — the loop driver treats a missing exit
-// as escalate.
+// enumerated directions it recorded on needs-input, a one-line context — the
+// deferred findings note, or the summary (always the summary on an outage, whose
+// line names the unreachable substrate) — for the options block, the branch-tip
+// SHA it left behind (head — fed to the loop's convergence guard), plus whether a
+// report was found at all. Absent fields stay zero — the loop driver treats a
+// missing exit as escalate.
 //
 // notBefore/fresh follow readPRReviewVerdict's contract, anchored on this
 // round's pr-fix-started marker instead.
@@ -87,9 +98,13 @@ func readPRFixReport(ctx context.Context, project, pmKey string, notBefore time.
 		Head     string               `json:"head"`
 	}
 	recorded, fresh = readStageReportSettled(ctx, project, pmKey, "stage.pr-fix", notBefore, &v, logger)
-	summary = v.Deferred
-	if summary == "" {
-		summary = v.Summary
+	// deferred is the findings note the options block leads with, so it wins
+	// wherever there are findings to defer. An outage deferred nothing and its one
+	// line is the card's face — which substrate was unreachable — so there the
+	// summary wins (SC-5627).
+	summary = v.Summary
+	if v.Exit != string(daemon.ExitOutage) && v.Deferred != "" {
+		summary = v.Deferred
 	}
 	return v.Exit, v.Options, summary, v.Head, recorded, fresh
 }
