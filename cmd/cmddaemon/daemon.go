@@ -5077,7 +5077,7 @@ func (r hostClaudeChatRunner) Run(ctx context.Context, resumeID, prompt string) 
 	if resumeID != "" {
 		args = append(args, "--resume", resumeID)
 	}
-	parsed, err := hostClaudeTurn(ctx, entry.Dir, args, r.refusals, r.storeStamp)
+	parsed, err := hostClaudeTurn(ctx, hostTurn{dir: entry.Dir, args: args}, r.refusals, r.storeStamp)
 	if err != nil {
 		return daemon.ChatTurn{}, err
 	}
