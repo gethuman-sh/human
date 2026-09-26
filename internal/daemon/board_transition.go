@@ -307,12 +307,13 @@ type BoardTransitionDeps struct {
 	// the hook path after the snapshot was taken — and escalating it reds a
 	// card over a live fixer (SC-5120). nil disables the check.
 	LoopStepAlive func(agentName string) bool
-	// Getter fetches the PM ticket so a recovery relaunch of the implementation
-	// stage can tell a self-planning fix pipeline (bug/security — which produces
-	// its own plan within the run) from a plan-executing build, and re-dispatch
-	// the right path. nil disables kind classification: the relaunch then falls
-	// back to the [human:bug-verdict] marker heuristic and finally to the plain
-	// build retry (SC-2986).
+	// Getter fetches the PM ticket so classifyFixPipeline can tell a self-planning
+	// fix pipeline (bug/security — which produces its own plan within the run)
+	// from a plan-executing ticket, and re-dispatch the right path — on a
+	// recovery relaunch of implementation AND on a planning dispatch, first or
+	// relaunched (SC-5793). nil disables kind classification: the caller then
+	// falls back to the [human:bug-verdict] marker heuristic and finally to the
+	// plain build retry or feature planning (SC-2986).
 	Getter tracker.Getter
 	// LiveAgents lists the board agents running on this machine, so a starting
 	// deploy can tell whether the implementation container still holds the
@@ -547,9 +548,13 @@ func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req Boa
 	// the single-step rule would reject it and the gesture would launch nothing
 	// (SC-355). A RUNNING planning card never reaches this path — the idempotency
 	// guard already returned for it.
+	//
+	// Classified first: this is where the daemon's own recovery sweep lands
+	// (Relaunch issues From: stage, To: stage), and a bug stranded in planning by
+	// a crash mid-triage must resume its fix pipeline rather than be planned as a
+	// feature (SC-5793).
 	case isPlanningRetry(req.To, card):
-		launched, err := d.startAgentStage(ctx, req.PMKey, BoardPlanning, PlanningStartedHeader,
-			planPrompt(req.PMKey), WaitCauseRetry, false)
+		launched, err := d.launchPlanningOrFix(ctx, req.PMKey, comments, "", WaitCauseRetry)
 		return true, launched, err
 
 	// Build retry: the same sanctioned in-place relaunch for a failed
@@ -615,7 +620,9 @@ func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req Boa
 // [human:nothing-to-do] card re-plans, and a [human:no-fix-needed] card re-runs
 // the fix — through its own self-planning pipeline where it has one, so an
 // autofix run that wrongly concluded not-a-bug re-triages rather than being
-// handed to the plan executor, which would refuse it for having no plan.
+// handed to the plan executor, which would refuse it for having no plan —
+// unless the ticket belongs to a fix pipeline, in which case both branches
+// resume that pipeline (SC-5793).
 //
 // The relaunch's *-started marker is strictly newer than the terminal, so the
 // card leaves resolved by the derivation's ordinary rules; nothing needs to
@@ -623,10 +630,13 @@ func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req Boa
 // overrule it.
 func (d BoardTransitionDeps) reopenResolved(ctx context.Context, req BoardTransitionRequest, card BoardCard, comments []tracker.Comment) (bool, error) {
 	if card.Stage == BoardPlanning {
-		return d.startAgentStage(ctx, req.PMKey, BoardPlanning, PlanningStartedHeader,
-			planPrompt(req.PMKey)+" — a person re-opened this ticket after it was resolved as nothing to do;"+
+		// Classified like its own non-planning branch below: a [human:nothing-to-do]
+		// on a bug is a verdict the FEATURE planner reached on a ticket that was
+		// never its to plan, so the re-open resumes the fix pipeline (SC-5793).
+		return d.launchPlanningOrFix(ctx, req.PMKey, comments,
+			" — a person re-opened this ticket after it was resolved as nothing to do;"+
 				" re-examine it rather than repeating the earlier conclusion",
-			WaitCause(""), false)
+			WaitCause(""))
 	}
 	switch d.classifyFixPipeline(ctx, req.PMKey, comments) {
 	case fixBug:
@@ -642,14 +652,41 @@ func (d BoardTransitionDeps) reopenResolved(ctx context.Context, req BoardTransi
 		WaitCause(""), true)
 }
 
+// launchPlanningOrFix is the ONE planning dispatch. Planning is a stage for
+// tickets whose plan is written by a planner; a bug or security ticket's plan is
+// written by its own run, so a ticket that belongs to a fix pipeline resumes that
+// pipeline instead of being handed to the feature planner. Every path that starts
+// or restarts planning goes through here, because "in planning, therefore a
+// feature" was true at each site individually and false for the ticket — a bug
+// stranded in planning is the ordinary recovery case after a crash mid-triage
+// (SC-5793; the rework and build-retry paths learned the same lesson as SC-2989
+// and SC-2986).
+//
+// It dispatches launchFixPipeline rather than ApplyFix on purpose: ApplyFix's
+// marker-shaped idempotency guard reads the [human:implementation-started] a dead
+// fix run left behind as a live one and would swallow the resume, reporting a
+// launch that never happened. Liveness here is the launcher's own single-flight
+// refusal, which is about containers rather than comments.
+//
+// extra is appended to whichever prompt is built, so a re-opened or decision-
+// resumed launch carries its direction into either pipeline.
+func (d BoardTransitionDeps) launchPlanningOrFix(ctx context.Context, pmKey string, comments []tracker.Comment, extra string, cause WaitCause) (bool, error) {
+	if kind := d.classifyFixPipeline(ctx, pmKey, comments); kind != fixNone {
+		return d.launchFixPipeline(ctx, pmKey, kind, extra)
+	}
+	return d.startAgentStage(ctx, pmKey, BoardPlanning, PlanningStartedHeader,
+		planPrompt(pmKey)+extra, cause, false)
+}
+
 // launchForwardStage dispatches an already-sanctioned forward transition to
 // its stage launcher. Split from ApplyTransition so the gate chain and the
 // dispatch read (and count) as separate concerns.
 func (d BoardTransitionDeps) launchForwardStage(ctx context.Context, req BoardTransitionRequest, card BoardCard, comments []tracker.Comment) (launched bool, err error) {
 	switch req.To {
 	case BoardPlanning:
-		return d.startAgentStage(ctx, req.PMKey, BoardPlanning, PlanningStartedHeader,
-			planPrompt(req.PMKey), req.Cause, false)
+		// A drop onto Planning is a request to start the ticket, not a claim about
+		// which pipeline owns it: a bug dropped here resumes its fix (SC-5793).
+		return d.launchPlanningOrFix(ctx, req.PMKey, comments, "", req.Cause)
 	case BoardImplementation:
 		return d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
 			executePrompt(dispatchKey(req.PMKey, card), ""), req.Cause, true)
@@ -718,12 +755,18 @@ func (d BoardTransitionDeps) ApplyFix(ctx context.Context, req BoardFixRequest) 
 // (SC-2596).
 //
 // It carries NO idempotency guard of its own. The two gesture entry points
-// (ApplyFix, ApplySecurityFix) check for a running stage before calling; the
-// paths that resume a decision must not, because the agent that RAISED the
+// (ApplyFix, ApplySecurityFix) check for a running stage before calling; every
+// other caller must not, and for a different reason each. The paths that resume
+// a decision (launchDecidedStage's BoardImplementation case, and the BoardPlanning
+// case by way of launchPlanningOrFix) must not, because the agent that RAISED the
 // decision leaves a [human:implementation-started] marker standing — a stage
 // that pauses on an open block posts no *-failed marker (stagePausedOnOptions),
 // so a marker-shaped guard reads the dead run as live and swallows the resume.
-// Those paths establish liveness the honest way, from the running containers.
+// launchPlanningOrFix's other callers (isPlanningRetry, reopenResolved,
+// launchForwardStage's BoardPlanning case) and resumeFixInsteadOfPlanning
+// likewise establish liveness the honest way, from the running containers, before
+// ever reaching here — the guard they need is classifyFixPipeline answering
+// fixNone, not a second check of this launcher.
 func (d BoardTransitionDeps) launchFixPipeline(ctx context.Context, pmKey string, kind fixPipeline, extra string) (bool, error) {
 	skill, identity := "/human-autofix ", "fix"
 	if kind == fixSecurity {
@@ -883,9 +926,11 @@ func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, 
 	// gap that let a non-drag route launch six doomed runs (SC-2596). Like the
 	// dependency gate it refuses before the claim, so nothing is claimed; unlike
 	// it, the refusal records a [human:needs-planning] marker so the card surfaces
-	// the determination back in Planning instead of leaving it invisible.
-	if refused, err := d.refuseIfUnplanned(ctx, pmKey, stage, requiresPlan); refused || err != nil {
-		return false, err
+	// the determination back in Planning instead of leaving it invisible — unless
+	// the ticket's own pipeline writes its plan, in which case that pipeline is
+	// resumed here and nothing is refused into planning (SC-5793).
+	if refused, launched, err := d.refuseIfUnplanned(ctx, pmKey, stage, requiresPlan); refused || err != nil {
+		return launched, err
 	}
 	// Claim before start: with several daemons on one board, arbitrate who
 	// launches this stage so the work is picked up exactly once (SC-660 rule 2).
@@ -1067,21 +1112,36 @@ func planStuckBody(drives int, since tracker.Comment) string {
 // blip must not refuse a launch, so the run proceeds and the agent's own plan
 // check (which distinguishes a genuine absence from an unreachable tracker)
 // remains the backstop.
-func (d BoardTransitionDeps) refuseIfUnplanned(ctx context.Context, pmKey string, stage BoardStage, requiresPlan bool) (refused bool, err error) {
+//
+// The gate asks which pipeline owns the ticket BEFORE any of this: "no plan" is
+// only a refusal condition for a ticket whose plan a planner writes, and a bug
+// or security ticket's plan is written by its own run — SC-4244 posted
+// [human:needs-planning] on a bug and drove it into feature planning from
+// exactly here (SC-5793).
+func (d BoardTransitionDeps) refuseIfUnplanned(ctx context.Context, pmKey string, stage BoardStage, requiresPlan bool) (refused bool, launched bool, err error) {
 	if !requiresPlan || stage != BoardImplementation {
-		return false, nil
+		return false, false, nil
 	}
 	comments, err := d.Commenter.ListComments(ctx, pmKey)
 	if err != nil {
 		d.Logger.Warn().Err(err).Str("pm", pmKey).
 			Msg("board stage: cannot read comments to check for a plan, starting anyway")
-		return false, nil
+		return false, false, nil
 	}
 	if hasPlanEvidence(comments) {
-		return false, nil
+		return false, false, nil
 	}
 	planState, planMarker := latestStateInStage(comments, BoardPlanning)
 	newestIsRefusal := strings.HasPrefix(strings.TrimSpace(planMarker.Body), NeedsPlanningHeader)
+
+	// "No plan" is not a refusal condition for a ticket whose plan its own run
+	// writes: it is that pipeline's normal shape. Asked BEFORE the marker, the
+	// bound and the drive, because none of the three applies to a fix ticket —
+	// SC-4244 posted [human:needs-planning] on a bug and drove it into feature
+	// planning from exactly here (SC-5793).
+	if handled, started, err := d.resumeFixInsteadOfPlanning(ctx, pmKey, comments, planState); handled {
+		return true, started, err
+	}
 
 	// A plan-stuck escalation already stands: it was said once, to a person,
 	// and driving planning again would only repeat the failure that exhausted
@@ -1089,14 +1149,14 @@ func (d BoardTransitionDeps) refuseIfUnplanned(ctx context.Context, pmKey string
 	if newestIsRefusal && isPlanStuck(planMarker.Body) {
 		d.Logger.Info().Str("pm", pmKey).
 			Msg("board stage: implementation refused — plan-stuck escalation already standing")
-		return true, nil
+		return true, false, nil
 	}
 	// Planning is already running from an earlier drive: withhold implementation
 	// without re-posting the refusal or launching a second planner.
 	if planState == BoardRunning {
 		d.Logger.Info().Str("pm", pmKey).
 			Msg("board stage: implementation refused — planning is already running")
-		return true, nil
+		return true, false, nil
 	}
 	// The ping-pong bound is spent: another drive would only repeat the same
 	// failure. Escalate to a person instead, naming what was tried and since
@@ -1104,11 +1164,11 @@ func (d BoardTransitionDeps) refuseIfUnplanned(ctx context.Context, pmKey string
 	if drives := countPlanRefusals(comments); drives >= PlanRedriveBound {
 		since, _ := oldestNeedsPlanning(comments)
 		if _, err := d.Commenter.AddComment(ctx, pmKey, planStuckBody(drives, since)); err != nil {
-			return true, errors.WrapWithDetails(err, "posting plan-stuck escalation marker", "pm", pmKey)
+			return true, false, errors.WrapWithDetails(err, "posting plan-stuck escalation marker", "pm", pmKey)
 		}
 		d.Logger.Info().Str("pm", pmKey).
 			Msg("board stage: implementation refused — plan re-drive bound exhausted; escalated to a person")
-		return true, nil
+		return true, false, nil
 	}
 	// Ordinary refusal: surface it only when it is not already the ticket's
 	// current planning-stage determination, so a reconcile re-drive does not
@@ -1117,7 +1177,7 @@ func (d BoardTransitionDeps) refuseIfUnplanned(ctx context.Context, pmKey string
 	if !newestIsRefusal {
 		body := markerBody(failureMarker(MarkerNeedsPlanning, needsPlanningReason))
 		if _, err := d.Commenter.AddComment(ctx, pmKey, body); err != nil {
-			return true, errors.WrapWithDetails(err, "posting needs-planning marker", "pm", pmKey)
+			return true, false, errors.WrapWithDetails(err, "posting needs-planning marker", "pm", pmKey)
 		}
 	}
 	d.Logger.Info().Str("pm", pmKey).
@@ -1126,9 +1186,41 @@ func (d BoardTransitionDeps) refuseIfUnplanned(ctx context.Context, pmKey string
 	// the drive happened, just not on this machine. Reporting it as this
 	// implementation refusal's error would name the wrong stage (SC-5094).
 	if _, err := d.startAgentStage(ctx, pmKey, BoardPlanning, PlanningStartedHeader, planPrompt(pmKey), WaitCauseRetry, false); err != nil && !stderrors.Is(err, ErrClaimLost) {
-		return true, err
+		return true, false, err
 	}
-	return true, nil
+	return true, false, nil
+}
+
+// resumeFixInsteadOfPlanning answers the plan gate's question for a ticket that
+// belongs to a self-planning fix pipeline: nothing is refused into planning, no
+// [human:needs-planning] is posted, and the pipeline that writes its own plan is
+// resumed instead. handled is false for an ordinary plan-executing ticket, which
+// takes the gate's existing path unchanged.
+//
+// A planner already RUNNING on the ticket withholds instead of launching: the
+// resume would put a second agent on the same worktree, and the mis-dispatched
+// planner's own ending re-enters the classified planning retry, which resumes the
+// fix then (SC-5793).
+func (d BoardTransitionDeps) resumeFixInsteadOfPlanning(ctx context.Context, pmKey string, comments []tracker.Comment, planState BoardState) (handled bool, launched bool, err error) {
+	kind := d.classifyFixPipeline(ctx, pmKey, comments)
+	if kind == fixNone {
+		return false, false, nil
+	}
+	if planState == BoardRunning {
+		d.Logger.Info().Str("pm", pmKey).
+			Msg("board stage: implementation refused — a planner is already running on this fix ticket; leaving the resume to its ending")
+		return true, false, nil
+	}
+	d.Logger.Info().Str("pm", pmKey).
+		Msg("board stage: implementation refused — this ticket's own pipeline writes its plan; resuming it instead of driving planning")
+	// A lost claim is another daemon resuming the same ticket: the resume
+	// happened, just not here, and naming it as this refusal's error would name
+	// the wrong stage (SC-5094).
+	started, err := d.launchFixPipeline(ctx, pmKey, kind, "")
+	if err != nil && !stderrors.Is(err, ErrClaimLost) {
+		return true, started, err
+	}
+	return true, started, nil
 }
 
 // startDeploy launches the deploy pipeline in the background. A package var so
@@ -3128,6 +3220,10 @@ func awaitingDecision(card BoardCard) bool {
 // planning instead — the SC-2986 class, reappearing on the decision path because
 // this was the one relaunch site that never classified the pipeline.
 //
+// A PLANNING launch is routed the same way (SC-5793): the feature planner is for
+// tickets whose plan a planner writes, and a fix ticket's is written by its own
+// run.
+//
 // A decision is human-initiated, like the Fix/Retry entry points: the interval
 // since the decision became available is the human's think-time, not a pipeline
 // wait, so it is suppressed (empty cause, SC-2462). A plan-executing
@@ -3138,10 +3234,16 @@ func (d BoardTransitionDeps) launchDecidedStage(ctx context.Context, pmKey strin
 		direction = " — a decision was made on this ticket: pursue the direction in the latest " +
 			OptionChosenHeader + " comment (" + label + ")"
 	}
-	if stage == BoardImplementation {
+	switch stage {
+	case BoardImplementation:
 		if kind := d.classifyFixPipeline(ctx, pmKey, comments); kind != fixNone {
 			return d.launchFixPipeline(ctx, pmKey, kind, direction)
 		}
+	case BoardPlanning:
+		// The planning half of the same rule: an autofix or security-fix run that
+		// raised its question in preflight is resumed as that pipeline, not handed
+		// to the feature planner, whichever stage the block named (SC-5793).
+		return d.launchPlanningOrFix(ctx, pmKey, comments, direction, WaitCause(""))
 	}
 	return d.startAgentStage(ctx, pmKey, stage, startedHeaderFor(stage),
 		stagePrompt(stage, pmKey, card)+direction, WaitCause(""), stage == BoardImplementation)
@@ -3225,9 +3327,16 @@ const (
 	fixSecurity                    // security-fix (/human-security-fix)
 )
 
-// classifyFixPipeline reports which self-planning fix pipeline should own a
-// recovery relaunch of the implementation stage. The ticket kind is
-// authoritative and covers every interruption point (including one before
+// classifyFixPipeline reports which pipeline owns a ticket, if any — self-planning
+// fix pipeline or none. It is the gate behind every planning-or-fix dispatch
+// (launchPlanningOrFix, reached from isPlanningRetry, reopenResolved,
+// launchForwardStage's BoardPlanning case and launchDecidedStage's BoardPlanning
+// case) as well as the implementation plan gate (isBuildRetry,
+// resumeFixInsteadOfPlanning, launchDecidedStage's BoardImplementation case), so
+// it answers for a ticket's FIRST launch onto Planning exactly as it does for a
+// recovery relaunch of Implementation — "in planning/implementation, therefore a
+// feature" is the same wrong assumption at every site (SC-5793). The ticket kind
+// is authoritative and covers every interruption point (including one before
 // triage posted its verdict): IsSecurity → security-fix, else IsBug → autofix.
 // With no Getter (or a fetch blip), it falls back to the marker heuristic — a
 // recorded [human:bug-verdict] with no [human:plan] is a bug pipeline

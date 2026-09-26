@@ -413,6 +413,14 @@ func findOption(opts []BoardOption, id string) (BoardOption, bool) {
 // [human:ticket-review] verdict exists yet, so planPrompt re-runs the gate with
 // the choice injected; a plain planning decision already carries a verdict, so
 // planPrompt skips the gate and goes straight to planning (SC-2137).
+//
+// The BoardPlanning case below is unreachable today, for fix tickets AND
+// feature tickets alike: launchDecidedStage's BoardPlanning case returns via
+// launchPlanningOrFix — which calls planPrompt directly — before it ever
+// reaches this switch (SC-5793). It stays as a defensive branch rather than
+// being deleted: without it, a future removal of that routing would fall
+// through to the default below and silently dispatch the executor
+// ("/human-execute ") on a planning launch instead of the planner.
 func stagePrompt(stage BoardStage, pmKey string, card BoardCard) string {
 	switch stage {
 	case BoardPlanning:
@@ -425,6 +433,11 @@ func stagePrompt(stage BoardStage, pmKey string, card BoardCard) string {
 }
 
 // startedHeaderFor maps an agent-launching stage to its started marker.
+//
+// The BoardPlanning case is unreachable today for the same reason stagePrompt's
+// is (SC-5793): this is only ever called alongside stagePrompt, from the one
+// call site a planning launch never reaches. Kept defensively so the default's
+// ImplementationStartedHeader is never mistaken for a planning start.
 func startedHeaderFor(stage BoardStage) string {
 	switch stage {
 	case BoardPlanning:

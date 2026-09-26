@@ -479,8 +479,9 @@
       "actor": "user",
       "runs": "human-planner",
       "marker": "[human:planning-started]",
-      "where": "board_transition.go launchForwardStage / isPlanningRetry / isQueuedLaunch",
-      "doc": "A drop on Planning. From planned it is a replan; from stopped or substrate-down it is a retry in place."
+      "where": "board_transition.go launchPlanningOrFix, from launchForwardStage / isPlanningRetry / launchDecidedStage",
+      "guard": "the ticket belongs to no fix pipeline: classifyFixPipeline returns fixNone from the recorded [human:pipeline] marker, the ticket kind and the marker heuristic, in that order (SC-5793)",
+      "doc": "A drop on Planning. From planned it is a replan; from stopped or substrate-down it is a retry in place. Every one of these dispatches classifies first: planning is the stage for tickets whose plan a planner writes, so a bug or security ticket takes fix-resumed-instead-of-planning to preflight instead — the same question the rework and build-retry paths ask (SC-2986/SC-2989), asked at the planning sites too (SC-5793)."
     },
     {
       "name": "plan-attached",
@@ -536,16 +537,18 @@
       "src": [
         "filed",
         "ticket-reviewed",
+        "planned",
         "stopped",
         "substrate-down",
-        "queued"
+        "queued",
+        "nothing-to-do"
       ],
       "dst": "preflight",
       "actor": "user",
       "runs": "human-autofix",
       "marker": "[human:implementation-started]",
       "where": "board_transition.go ApplyFix; board_options.go launchDecidedStage → launchFixPipeline when the stage was queued by a decision",
-      "doc": "Dropping a bug on Fix. The run is self-planning — it produces its own plan rather than requiring one."
+      "doc": "Dropping a bug on Fix. The run is self-planning — it produces its own plan rather than requiring one. A person re-opening a [human:nothing-to-do] on a bug reaches the same dispatch: reopenResolved classifies and the fix pipeline resumes (SC-5793). A bug that already carries a plan and is dropped on Planning again lands here too: ticket kind is authoritative over plan evidence, so start-planning's guard sends it to the fix run rather than to the feature planner (SC-5793)."
     },
     {
       "name": "preflight-clear",
@@ -1066,8 +1069,24 @@
       "dst": "stopped",
       "actor": "daemon",
       "marker": "[human:needs-planning]",
-      "where": "board_transition.go refuseIfUnplanned",
-      "doc": "The plan executor was launched on a ticket with no plan, so the launch is refused before any agent claims it. The item surfaces back at planning where a human can start one. A relaunch attempted on a card that already failed meets the same gate, so the refusal is also a move a stopped card makes onto itself: the plan is still missing, and the card stays exactly as red as it was. Which of the two determinations a [human:needs-planning] comment is, is its escalation field — plan-stuck for the bound-exhausted escalation, absent for an ordinary refusal (SC-4245); comments posted before the field carry it in their prose and are read by a frozen legacy sentinel."
+      "where": "board_transition.go refuseIfUnplanned — after resumeFixInsteadOfPlanning has declined it",
+      "guard": "the ticket belongs to no fix pipeline (classifyFixPipeline == fixNone); a fix ticket is resumed by fix-resumed-instead-of-planning and no [human:needs-planning] is posted for it at all (SC-5793)",
+      "doc": "The plan executor was launched on a ticket with no plan, so the launch is refused before any agent claims it. The item surfaces back at planning where a human can start one. A relaunch attempted on a card that already failed meets the same gate, so the refusal is also a move a stopped card makes onto itself: the plan is still missing, and the card stays exactly as red as it was. Which of the two determinations a [human:needs-planning] comment is, is its escalation field — plan-stuck for the bound-exhausted escalation, absent for an ordinary refusal (SC-4245); comments posted before the field carry it in their prose and are read by a frozen legacy sentinel. A missing plan is only a refusal for a ticket whose plan a planner writes. A bug or security ticket's plan is written by its own run, so the gate resumes that run instead — this is the marker SC-4244 posted on a bug, asking a person to run planning the pipeline runs itself (SC-5793)."
+    },
+    {
+      "name": "fix-resumed-instead-of-planning",
+      "src": [
+        "implementing",
+        "stopped",
+        "substrate-down",
+        "queued"
+      ],
+      "dst": "preflight",
+      "actor": "daemon",
+      "runs": "human-autofix",
+      "marker": "[human:implementation-started]",
+      "where": "board_transition.go launchPlanningOrFix (the isPlanningRetry retry, the forward drop, the decided planning stage) and refuseIfUnplanned → resumeFixInsteadOfPlanning (the plan gate)",
+      "doc": "The machine was about to plan a ticket whose plan its own run writes, and asked first. Every path that starts or restarts planning — the in-place retry the recovery sweep drives, the forward drop, a decision answered while the card sits in planning — and the plan gate that would otherwise refuse an implementation launch for having no plan, all classify the ticket (classifyFixPipeline: the recorded [human:pipeline] marker, then the ticket kind, then the marker heuristic) and resume the fix pipeline rather than dispatching the feature planner. Before this, each site assumed 'in planning, therefore a feature': SC-4244's bug was refused for having no plan, driven into planning, told a person to run planning, and ended with a feature plan (SC-5793). The fix pipeline posts [human:implementation-started] and [human:pipeline], so the card moves to the stage where the work actually is. One case deliberately does not resume: a planner already RUNNING on the ticket withholds, because a second agent on one ticket is worse than one wrong one, and that planner's own ending re-enters this transition."
     },
     {
       "name": "plan-redrive-exhausted",
@@ -1168,8 +1187,9 @@
       "actor": "user",
       "runs": "human-planner",
       "marker": "[human:planning-started]",
-      "where": "board_transition.go reopenResolved; desktop App.Reopen",
-      "doc": "A person judged the nothing-to-do terminal wrong and re-plans. Separate from every retry gesture because the automatic relaunch drives the identical same-stage request — only an explicitly human call may re-run a clean terminal."
+      "where": "board_transition.go reopenResolved → launchPlanningOrFix; desktop App.Reopen",
+      "guard": "the ticket belongs to no fix pipeline: classifyFixPipeline returns fixNone from the recorded [human:pipeline] marker, the ticket kind and the marker heuristic, in that order (SC-5793)",
+      "doc": "A person judged the nothing-to-do terminal wrong and re-plans. Separate from every retry gesture because the automatic relaunch drives the identical same-stage request — only an explicitly human call may re-run a clean terminal. A re-open classifies like every other planning start: a [human:nothing-to-do] reached on a bug by a planner that was never its to run re-enters the fix pipeline, not the planner (SC-5793)."
     },
     {
       "name": "reopen-fix",
