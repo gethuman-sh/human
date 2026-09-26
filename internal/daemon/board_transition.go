@@ -1509,6 +1509,47 @@ func roundsNetOfOutage(comments []tracker.Comment, startedHeader string) int {
 	return n
 }
 
+// reviewFollowsOutagedFix reports that the newest pr-review-started marker was
+// posted directly after a done-stage outage that interrupted the fix dispatch
+// preceding it — the SC-5627 case where an outage during the fix step parks
+// the card and the uncharged re-drive re-enters the done stage at
+// startPRReview (runDoneStage always re-enters at review), skipping the fix
+// that was actually dispatched. The fixer named on that pr-fix-started marker
+// never ran, so lastFixFinding/lastFixClass still name the finding the
+// reviewer is about to report again — a false repeat, not the reviewer and
+// fixer disagreeing.
+//
+// Chronological with a pending flag, the same walk as roundsNetOfOutage:
+// entering a fix dispatch arms the flag, a review-started marker (recorded
+// after a real fix report) disarms it, and the flag is read off at exactly the
+// newest review-started marker, so a stray earlier outage — including one that
+// interrupted the REVIEWER's own run rather than the fixer's — never taints a
+// later, genuine round. An outage during review is not this case: the fix
+// dispatch it followed already completed, so the finding it compares against
+// is real.
+func reviewFollowsOutagedFix(comments []tracker.Comment) bool {
+	sorted := make([]tracker.Comment, len(comments))
+	copy(sorted, comments)
+	sort.SliceStable(sorted, func(i, j int) bool { return commentNewer(sorted[j], sorted[i]) })
+
+	inFix, outagedFix, result := false, false, false
+	for _, c := range sorted {
+		trimmed := strings.TrimSpace(c.Body)
+		switch {
+		case strings.HasPrefix(trimmed, PRFixStartedHeader):
+			inFix, outagedFix = true, false
+		case strings.HasPrefix(trimmed, PRReviewStartedHeader):
+			result = outagedFix
+			inFix, outagedFix = false, false
+		case strings.HasPrefix(trimmed, DeployOutageHeader):
+			if inFix {
+				outagedFix = true
+			}
+		}
+	}
+	return result
+}
+
 // deployFixRounds counts the deploy-fix rounds the budget has actually been
 // charged for: one per deploy-fix-started marker, MINUS every round whose fixer
 // ended in an outage.
@@ -1741,7 +1782,12 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, ou
 	// so comparing it here would always read true and falsely blame a
 	// fix-stage escalation (a crashed fixer, an unclassifiable exit) on a
 	// repeated finding it never re-reviewed (SC-5174).
-	if LatestPRLoopStage(comments) == PRStageReview {
+	// A review whose immediately preceding fix dispatch never ran — parked by an
+	// outage and re-driven straight back into review — has nothing to compare
+	// against: the finding it names is the one that fix was SENT, not one it
+	// addressed and failed to fix. Comparing here would read the outage itself
+	// as the fixer and the reviewer disagreeing (SC-5627).
+	if LatestPRLoopStage(comments) == PRStageReview && !reviewFollowsOutagedFix(comments) {
 		byIdentity := findingRepeated(comments, outcome.ReviewFinding)
 		byClass := classRepeated(comments, outcome.ReviewClass)
 		outcome.FindingRepeated = byIdentity || byClass

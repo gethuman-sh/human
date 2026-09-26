@@ -234,6 +234,86 @@ func TestPRReviewRounds_StaysTheRawStartedCount(t *testing.T) {
 	assert.Equal(t, 2, PRReviewRounds(comments), "the findings record's round identity is not refunded")
 }
 
+// The uncharged re-drive re-enters the done stage at startPRReview, which
+// always posts a fresh pr-review-started — even when the outage interrupted
+// the FIX step and no fixer ever ran to address what it was sent. That
+// reviewer necessarily reports the same finding again; it must dispatch a
+// fresh fixer, not read the outage as the fixer and reviewer disagreeing.
+func TestReviewFollowsOutagedFix_TrueOnlyRightAfterAFixOutage(t *testing.T) {
+	base := time.Unix(1, 0)
+	t.Run("fix outage then review", func(t *testing.T) {
+		comments := []tracker.Comment{
+			cmt("[human:ready-for-review]\nbranch: feat/x", base),
+			cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), base.Add(time.Second)),
+			cmt(prFixStartedBody("a.go — x", "a.go — correctness"), base.Add(2*time.Second)),
+			cmt(DeployOutageHeader, base.Add(3*time.Second)),
+			cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), base.Add(4*time.Second)),
+		}
+		assert.True(t, reviewFollowsOutagedFix(comments))
+	})
+	t.Run("ordinary fix then review — no outage between them", func(t *testing.T) {
+		comments := []tracker.Comment{
+			cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), base),
+			cmt(prFixStartedBody("a.go — x", "a.go — correctness"), base.Add(time.Second)),
+			cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), base.Add(2*time.Second)),
+		}
+		assert.False(t, reviewFollowsOutagedFix(comments))
+	})
+	t.Run("review outage does not taint the round — the preceding fix was real", func(t *testing.T) {
+		comments := []tracker.Comment{
+			cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), base),
+			cmt(prFixStartedBody("a.go — x", "a.go — correctness"), base.Add(time.Second)),
+			cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), base.Add(2*time.Second)),
+			cmt(DeployOutageHeader, base.Add(3*time.Second)),
+			cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), base.Add(4*time.Second)),
+		}
+		assert.False(t, reviewFollowsOutagedFix(comments))
+	})
+	t.Run("a stale earlier fix outage does not taint a later genuine round", func(t *testing.T) {
+		comments := []tracker.Comment{
+			cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), base),
+			cmt(prFixStartedBody("a.go — x", "a.go — correctness"), base.Add(time.Second)),
+			cmt(DeployOutageHeader, base.Add(2*time.Second)),
+			cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), base.Add(3*time.Second)),
+			cmt(prFixStartedBody("a.go — x", "a.go — correctness"), base.Add(4*time.Second)),
+			cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), base.Add(5*time.Second)),
+		}
+		assert.False(t, reviewFollowsOutagedFix(comments))
+	})
+}
+
+// The full reproduction from the review finding: a fix-stage outage parks the
+// card, the outage re-drive re-enters at review, and that reviewer reports the
+// exact finding the fixer was sent but never got to address. The loop must
+// dispatch the fixer again rather than reading it as a repeat and escalating.
+func TestAdvancePRLoop_ReviewAfterFixOutage_DispatchesTheFixerInsteadOfEscalating(t *testing.T) {
+	finding := ParseFindings("BLOCKING a.go:10 — key logged raw — [correctness] x")[0]
+	base := time.Now().Add(-time.Hour)
+	thread := []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", base),
+		cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), base.Add(time.Second)),
+		cmt(prFixStartedBody(finding.Fingerprint(), finding.ClassKey()), base.Add(2*time.Second)),
+		cmt(DeployOutageHeader, base.Add(3*time.Second)),
+		cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), base.Add(4*time.Second)),
+	}
+	c := &fakeCommenter{comments: thread}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+
+	err := deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{
+		ReviewRecorded: true, ReviewVerdict: PRVerdictChanges,
+		ReviewFinding: finding.Fingerprint(), ReviewClass: finding.ClassKey(),
+	})
+	require.NoError(t, err)
+
+	_, failed := posted(c, PRReviewFailedHeader)
+	assert.False(t, failed, "the fixer never ran; this cannot be the same disagreement twice")
+	started, ok := posted(c, PRFixStartedHeader)
+	require.True(t, ok, "the fixer must be dispatched to actually address the finding this time")
+	assert.Contains(t, started, "finding: a.go — key logged raw")
+	assert.Equal(t, 1, l.calls)
+}
+
 func TestDriveDeployFixExit_SubstrateFailureIsNotAnExit(t *testing.T) {
 	for _, errorType := range []string{"server_error", "api_error", "overloaded", "rate_limit"} {
 		t.Run(errorType, func(t *testing.T) {
