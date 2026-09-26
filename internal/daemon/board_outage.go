@@ -17,7 +17,8 @@ import (
 // an outage that never ends (a revoked token, a closed account, an approval
 // that will not be granted again) is indistinguishable from one that will
 // return except by how long it has lasted (SC-2851). Exported so tests can
-// shorten it.
+// shorten it. An outage this daemon's own proxy explains never starts a wait
+// at all — it is a config gap, not a substrate down (SC-5840).
 var OutageWaitBound = 6 * time.Hour
 
 // outageRunSince returns when the card's CURRENT outage run began: the oldest
@@ -106,6 +107,22 @@ func handOverOutage(ctx context.Context, pmKey string, derived BoardCard, deps R
 	return true
 }
 
+// explainedByEgressBlock reports the policy denial that accounts for an
+// outage-classified ending, if any.
+//
+// A model-boundary pause is deliberately excluded. classifyUnavailability has
+// already diagnosed a rate limit, an overloaded model API, a 5xx or an auth
+// refusal from the hook's own errorType; replacing a correct diagnosis with a
+// coincident proxy refusal would trade a true statement for a plausible one.
+// Only the plain recorded-outage ending — the agent saying "the network was
+// down" with no signal of this daemon's own — is correlated (SC-5840).
+func explainedByEgressBlock(retry StageRetry, pmKey string, kind endingKind) (EgressBlock, bool) {
+	if kind == endingPaused {
+		return EgressBlock{}, false
+	}
+	return retry.egressBlock(pmKey)
+}
+
 // handleOutageExit deals with a stage exit that reported the substrate was
 // down — whether recorded via the retry policy's ExitOutage (SC-2307) or
 // recognised here from the hook errorType / model-boundary class alone (the
@@ -114,6 +131,12 @@ func handOverOutage(ctx context.Context, pmKey string, derived BoardCard, deps R
 // distinct *-outage marker so the card reads "paused" rather than red, and
 // does NOT relaunch here — the durable reconcile pass owns the backoff, with
 // the retry budget untouched.
+//
+// Not every ending that says "outage" is one. A host this daemon's proxy
+// refused by policy is closed with no TLS alert, so the container cannot tell
+// it from a dead network — such an ending reds once with the host and the
+// config line named, and is NOT relaunched (postEgressBlockedFailure,
+// SC-5840). A model-boundary pause is never reclassified this way.
 //
 // kind/reason are classifyUnavailability's verdict: kind == endingPaused
 // routes here even when nothing was recorded; reason is the substrate phrase
@@ -127,6 +150,10 @@ func handleOutageExit(ctx context.Context, exit RunExit, commenter tracker.Comme
 	outageType := outageTypeFor(exit.Stage)
 	if outageType == "" || (!deps.Retry.recordedOutage(exit.PMKey, exit.Stage) && kind != endingPaused) {
 		return false
+	}
+	if blk, ok := explainedByEgressBlock(deps.Retry, exit.PMKey, kind); ok {
+		return postEgressBlockedFailure(ctx, exit.PMKey, exit.Stage, exit.Comments, blk,
+			commenterPoster(commenter), logger)
 	}
 	body := markerBody(pausedOutageMarker(outageType, deps.Diagnose, exit.AgentName, exit.ErrorType, reason))
 	// Say it once and leave it standing: every relaunch that re-hits the same

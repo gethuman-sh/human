@@ -1293,6 +1293,23 @@ func TestDefaultProxyDomains_AllowsGitHubApex(t *testing.T) {
 	assert.True(t, p.Allowed("api.github.com"), "the wildcard entry must still cover subdomains")
 }
 
+// TestDefaultProxyDomains_EveryWildcardHasItsApex pins the RULE, not the one
+// instance: the matcher is DNS-style, so a list carrying "*.vendor.com" without
+// "vendor.com" blocks the apex host that git remotes and plain vendor pages
+// live on — which shipped as an unreachable fetch (SC-5593) and then as a
+// six-hour phantom network outage (SC-5840).
+func TestDefaultProxyDomains_EveryWildcardHasItsApex(t *testing.T) {
+	p, err := proxy.NewPolicy(proxy.ModeAllow, DefaultProxyDomains)
+	require.NoError(t, err)
+	for _, d := range DefaultProxyDomains {
+		apex, ok := strings.CutPrefix(d, "*.")
+		if !ok {
+			continue
+		}
+		assert.True(t, p.Allowed(apex), "%s is allowed but its apex %s is not", d, apex)
+	}
+}
+
 // TestGenerateProxyYAML_ListsGitHubApexEntry checks the apex reaches the
 // written .humanconfig.yaml as its own entry: asserting on the substring
 // "github.com" alone would pass on "*.github.com".

@@ -325,6 +325,13 @@ type BoardTransitionDeps struct {
 	// package's "nil disables" convention) — the bare CLI cannot list agents, and
 	// the daemon route always can.
 	LiveAgents LiveAgentLister
+	// EgressBlocked reports a policy denial this daemon's proxy recorded, so a
+	// deploy fixer that reported an outage because a host was REFUSED is redded
+	// once with the host and the config line named instead of parked on an
+	// uncharged wait no config change can end (SC-5840). nil disables the
+	// correlation (the package's "nil disables" convention) — the bare CLI
+	// route has no proxy store to ask.
+	EgressBlocked EgressBlockProbe
 }
 
 // Hyphen-free agent-name suffixes for the PR review→fix loop steps. parseAgentName
@@ -2032,9 +2039,11 @@ type DeployFixReport struct {
 	// carries it onto the marker it posts on the fixer's behalf (SC-5179).
 	Blocker Blocker
 	// Summary is the fixer's one line about its stop. On an outage it is the only
-	// place the unreachable substrate is named — an outage carries no blocker by
-	// contract (shared/exit-contract.md) — so it becomes the outage marker's
-	// reason and, through DeriveBoardCard, the card's face (SC-5592).
+	// place the unreachable substrate is named for a real outage — an outage
+	// carries no blocker by contract (shared/exit-contract.md) — so it becomes
+	// the outage marker's reason and, through DeriveBoardCard, the card's face
+	// (SC-5592). A policy-refused host is named by the daemon from its own block
+	// record instead, not from this line (SC-5840).
 	Summary string
 }
 
@@ -2042,12 +2051,14 @@ type DeployFixReport struct {
 // failure watcher calls it with the report the agent recorded in stage.deploy-fix. A
 // `done` exit publishes the fixer's local resolution and re-runs the deploy pipeline
 // (the branch is then ready for a fresh CI gate + merge); an `outage` exit is not a
-// failure at all and parks the card on the done stage's outage marker (SC-5592); any
-// other exit reds the card with a terminal deploy-failed. The deployFixRounds budget
-// already bounds how many times the pipeline re-enters here, so a genuinely
-// unfixable failure terminates. The blocker is what a needs-human-work stop recorded
-// about itself; the loop carries it onto the marker it posts on the agent's behalf,
-// so the person on the red card is not sent back to re-run the investigation.
+// failure at all and parks the card on the done stage's outage marker (SC-5592) —
+// unless this daemon's own proxy refused the host the fixer needed, which is a
+// configuration gap and reds once instead (SC-5840); any other exit reds the card
+// with a terminal deploy-failed. The deployFixRounds budget already bounds how many
+// times the pipeline re-enters here, so a genuinely unfixable failure terminates.
+// The blocker is what a needs-human-work stop recorded about itself; the loop
+// carries it onto the marker it posts on the agent's behalf, so the person on the
+// red card is not sent back to re-run the investigation.
 func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string, report DeployFixReport) error {
 	fixExit := report.Exit
 	comments, err := d.Commenter.ListComments(ctx, pmKey)
@@ -2110,7 +2121,7 @@ func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string,
 	// round's dispatch is another actor's red that a person now owns, and flipping it
 	// back to "waiting" would re-drive the deploy underneath them (SC-5592).
 	if fixExit == ExitOutage {
-		return d.deployFixOutage(ctx, pmKey, comments, report.Summary)
+		return d.deployFixUnreachable(ctx, pmKey, comments, report.Summary)
 	}
 	// The fixer's own blocker evidence rides on the marker: the escalation
 	// line says what the fixer was sent to fix, the four fields say what it
@@ -2125,12 +2136,42 @@ func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string,
 	return nil
 }
 
+// deployFixUnreachable decides WHICH kind of unreachable the fixer met.
+//
+// A substrate that is down is a wait (deployFixOutage, SC-5592). A host this
+// daemon's own proxy refused by policy is not: the fixer saw the same bare EOF
+// and reported the same exit, but nothing comes back until a person edits
+// proxy.domains — so the card reds once naming the host and the line to add,
+// and no re-drive follows (SC-5840). Reached under AdvanceDeployFix's
+// stageAlreadyFailed guard, so a done stage another actor already redded stays
+// as they left it.
+func (d BoardTransitionDeps) deployFixUnreachable(ctx context.Context, pmKey string, comments []tracker.Comment, summary string) error {
+	if blk, ok := d.egressBlock(pmKey); ok {
+		if postEgressBlockedFailure(ctx, pmKey, BoardDoneStage, comments, blk,
+			commenterPoster(d.Commenter), d.Logger) {
+			return nil
+		}
+	}
+	return d.deployFixOutage(ctx, pmKey, comments, summary)
+}
+
+// egressBlock asks the probe, nil-safe.
+func (d BoardTransitionDeps) egressBlock(pmKey string) (EgressBlock, bool) {
+	if d.EgressBlocked == nil {
+		return EgressBlock{}, false
+	}
+	return d.EgressBlocked(pmKey)
+}
+
 // deployFixOutage posts the done stage's outage marker for a fixer that reported
 // the substrate was unreachable, and says it once: an identical standing marker is
 // left in place rather than re-dated, which is both what keeps the ticket from
 // collecting one per tick and what makes the wait measurable (outageRunSince,
 // SC-2851). summary is the fixer's own line, so the card names what was
 // unreachable instead of the generic fallback.
+//
+// Reached only for an outage this host cannot explain; a policy-refused host is
+// split off by deployFixUnreachable first.
 func (d BoardTransitionDeps) deployFixOutage(ctx context.Context, pmKey string, comments []tracker.Comment, summary string) error {
 	// The fixer's summary is agent-authored free text and the template's "one
 	// line" is not enforced: collapsed to a single line (not just the first)
@@ -2206,9 +2247,11 @@ func deployFixEscalationReason(fixExit StageExit, dispatched string, rounds int)
 		return "the deploy failure needs manual work the fixer could not do — resolve it on the branch, then re-run Deploy." + blocking + attempts
 	case ExitOutage:
 		// Not reachable from AdvanceDeployFix, which routes an outage to the
-		// uncharged outage marker above before any escalation is composed. Written
-		// as a real answer rather than a fall-through so a direct caller — or a
-		// future route — states the wait instead of blaming the branch.
+		// uncharged outage marker above before any escalation is composed — and a
+		// policy-refused host is split off even earlier by deployFixUnreachable,
+		// which posts its own red through postEgressBlockedFailure (SC-5840).
+		// Written as a real answer rather than a fall-through so a direct caller —
+		// or a future route — states the wait instead of blaming the branch.
 		return "the deploy fixer could not reach the substrate it needs — wait for it to come back, then re-run Deploy." + blocking + attempts
 	case ExitRetryable, ExitDone:
 		return deployFixStalledReason(dispatched, blocking) + attempts

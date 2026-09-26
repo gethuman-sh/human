@@ -179,8 +179,13 @@ type daemonState struct {
 	logger       zerolog.Logger
 	connTracker  *daemon.ConnectedTracker
 	networkStore *daemon.NetworkEventStore
-	modelSink    *daemon.ModelOutcomeSink
-	agentIPs     *daemon.AgentIPRegistry
+	// egressBlocked correlates a stage's recorded outage against this daemon's
+	// own proxy refusals (SC-5840). Built once, alongside networkStore, so
+	// every boardTransitionDepsFor call site shares one probe over one store
+	// rather than each reconstructing its own closure over the same data.
+	egressBlocked daemon.EgressBlockProbe
+	modelSink     *daemon.ModelOutcomeSink
+	agentIPs      *daemon.AgentIPRegistry
 	// inflightModelRequests and pendingModelRequests back the outstanding
 	// model-request signal (SC-3074): the per-agent open-request counter and
 	// its holding area for a mark that arrived before the agent's IP mapping
@@ -351,6 +356,21 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 	// eviction and daemon restarts, keyed to the emitting agent's execution log.
 	hookStore := daemon.NewHookEventStore().WithPersistence(agent.HookEventSink)
 	networkStore := daemon.NewNetworkEventStore()
+	// The daemon's own proxy already records every host it refuses; this is the
+	// one place that turns that record into a classification an outage path can
+	// read (SC-5840). The config file is resolved per key through the same
+	// EntryForKey routing every other board read uses, so the card names the
+	// file a person actually has to edit.
+	egressBlocked := daemon.NewEgressBlockProbe(networkStore, func(pmKey string) string {
+		entry, err := projectRegistry.EntryForKey(pmKey)
+		if err != nil {
+			return ""
+		}
+		if path, ok := config.LocateFile(entry.Dir); ok {
+			return path
+		}
+		return filepath.Join(entry.Dir, ".humanconfig.yaml")
+	}, time.Now)
 	// The model-call accounting boundary: the sink drains outcomes off the
 	// request path, and the IP registry attributes each proxy connection to the
 	// board agent (ticket+stage) that owns it (SC-2555).
@@ -490,10 +510,10 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		AuditStore:             auditStore,
 		AgentCleaner:           &dockerAgentCleaner{},
 		VaultResolver:          vaultResolver,
-		BoardTransitioner:      boardTransitionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, ipWiring),
-		BoardFixer:             boardFixerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, ipWiring),
-		BoardSecurityFixer:     securityFixerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, ipWiring),
-		BoardOptioner:          boardOptionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, ipWiring),
+		BoardTransitioner:      boardTransitionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, ipWiring, egressBlocked),
+		BoardFixer:             boardFixerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, ipWiring, egressBlocked),
+		BoardSecurityFixer:     securityFixerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, ipWiring, egressBlocked),
+		BoardOptioner:          boardOptionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, ipWiring, egressBlocked),
 		BugCreator:             bugCreatorFunc(projectRegistry, vaultResolver, relateLauncherFunc(projectRegistry, daemonID, ipWiring)),
 		WhereComments:          whereCommentsFunc(projectRegistry, vaultResolver),
 		WhereAttempts: func(pmKey string, stage daemon.BoardStage) (int, error) {
@@ -526,6 +546,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		logger:                logger,
 		connTracker:           connTracker,
 		networkStore:          networkStore,
+		egressBlocked:         egressBlocked,
 		modelSink:             modelSink,
 		agentIPs:              agentIPs,
 		inflightModelRequests: inflightModelRequests,
@@ -801,14 +822,14 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	reviewLaunchGate := func(ctx context.Context) []daemon.DoctorCheck {
 		return ds.srv.Doctor.Blockers(ctx, daemon.LaunchRefusalChecks())
 	}
-	boardTransition := boardTransitionerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate, ipWiringFrom(ds))
+	boardTransition := boardTransitionerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate, ipWiringFrom(ds), ds.egressBlocked)
 	// A forwarded `human deploy` runs inside this process; handing it the same
 	// deps the board routes use is what lets it open the draft and launch the
 	// reviewer instead of merging on CI alone (F10).
 	ds.srv.TransitionDeps = func(pmKey string) (daemon.BoardTransitionDeps, error) {
-		return boardTransitionDepsFor(ds.srv.Projects, pmKey, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate, ipWiringFrom(ds))
+		return boardTransitionDepsFor(ds.srv.Projects, pmKey, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate, ipWiringFrom(ds), ds.egressBlocked)
 	}
-	boardRetryTransition := boardRetryTransitionerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate, ipWiringFrom(ds))
+	boardRetryTransition := boardRetryTransitionerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate, ipWiringFrom(ds), ds.egressBlocked)
 	// A finished build chains straight into its review — the board's
 	// auto-review; the transition engine re-derives and validates. Shared by
 	// the live hook path (RunBoardFailureWatch) and the durable restart-recovery
@@ -889,6 +910,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		Uncount: func(pmKey string, stage daemon.BoardStage) {
 			decStageRetries(ctx, boardStateProject(ds.srv.Projects, pmKey), pmKey, stage)
 		},
+		EgressBlocked: ds.egressBlocked,
 	}
 	go daemon.RunBoardFailureWatch(ctx, ds.srv.HookEvents, boardRuns, daemon.FailureDeps{
 		CommenterFor:     boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID),
@@ -4207,7 +4229,7 @@ func durableStageRetry(ctx context.Context, live daemon.StageRetry, reg *daemon.
 // is long gone (SC-1892).
 func advancePRLoopFunc(ctx context.Context, ds *daemonState, diagnose daemon.BoardFailureDiagnoser, reviewLaunchGate func(context.Context) []daemon.DoctorCheck, findingsRecord recall.FindingsRecorder, logger zerolog.Logger) func(pmKey, agentName, errorType string) error {
 	return func(pmKey, agentName, errorType string) error {
-		deps, err := boardTransitionDepsFor(ds.srv.Projects, pmKey, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate, ipWiringFrom(ds))
+		deps, err := boardTransitionDepsFor(ds.srv.Projects, pmKey, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate, ipWiringFrom(ds), ds.egressBlocked)
 		if err != nil {
 			return err
 		}
@@ -4285,7 +4307,7 @@ func openFindingsRecord(logger zerolog.Logger) recall.FindingsRecorder {
 // outage, or reds it on anything else.
 func advanceDeployFixFunc(ctx context.Context, ds *daemonState, launchGate func(context.Context) []daemon.DoctorCheck, logger zerolog.Logger) func(pmKey string) error {
 	return func(pmKey string) error {
-		deps, err := boardTransitionDepsFor(ds.srv.Projects, pmKey, ds.vaultResolver, ds.daemonID, logger, launchGate, ipWiringFrom(ds))
+		deps, err := boardTransitionDepsFor(ds.srv.Projects, pmKey, ds.vaultResolver, ds.daemonID, logger, launchGate, ipWiringFrom(ds), ds.egressBlocked)
 		if err != nil {
 			return err
 		}
@@ -4320,7 +4342,7 @@ func boardStateProject(reg *daemon.ProjectRegistry, pmKey string) string {
 // and the forge publisher against the resolved project dir. Shared by the
 // board-transition and board-fix closures so both routes drive the exact same
 // engine.
-func boardTransitionDepsFor(reg *daemon.ProjectRegistry, pmKey string, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs agentIPWiring) (daemon.BoardTransitionDeps, error) {
+func boardTransitionDepsFor(reg *daemon.ProjectRegistry, pmKey string, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs agentIPWiring, egressBlocked daemon.EgressBlockProbe) (daemon.BoardTransitionDeps, error) {
 	entry, err := reg.EntryForKey(pmKey)
 	if err != nil {
 		return daemon.BoardTransitionDeps{}, err
@@ -4393,16 +4415,17 @@ func boardTransitionDepsFor(reg *daemon.ProjectRegistry, pmKey string, resolver 
 		// here must NOT read as alive: that would stall every deploy for the whole
 		// wait bound on a docker hiccup, so the interlock treats an unusable
 		// answer as "not held" (SC-5691).
-		LiveAgents: liveBoardAgents,
+		LiveAgents:    liveBoardAgents,
+		EgressBlocked: egressBlocked,
 	}, nil
 }
 
 // boardTransitionerFunc builds the daemon's BoardTransitioner closure: it
 // resolves the PM commenter by role per request and applies the transition with
 // the Docker launcher and forge publisher against the resolved project dir.
-func boardTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs agentIPWiring) func(daemon.BoardTransitionRequest) error {
+func boardTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs agentIPWiring, egressBlocked daemon.EgressBlockProbe) func(daemon.BoardTransitionRequest) error {
 	return func(req daemon.BoardTransitionRequest) error {
-		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate, agentIPs)
+		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate, agentIPs, egressBlocked)
 		if err != nil {
 			return err
 		}
@@ -4413,9 +4436,9 @@ func boardTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver
 // boardRetryTransitionerFunc is boardTransitionerFunc's retry twin: it reports
 // whether the relaunch actually LAUNCHED, so the retry accounting never charges an
 // attempt for a refusal that started nothing (SC-2989).
-func boardRetryTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs agentIPWiring) func(daemon.BoardTransitionRequest) (bool, error) {
+func boardRetryTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs agentIPWiring, egressBlocked daemon.EgressBlockProbe) func(daemon.BoardTransitionRequest) (bool, error) {
 	return func(req daemon.BoardTransitionRequest) (bool, error) {
-		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate, agentIPs)
+		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate, agentIPs, egressBlocked)
 		if err != nil {
 			return false, err
 		}
@@ -4428,9 +4451,9 @@ func boardRetryTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Res
 // (planning gate skipped — autofix triages, plans and fixes in one run).
 // boardOptionerFunc builds the daemon's BoardOptioner closure: it records a
 // chosen option and relaunches the block's stage with the choice injected.
-func boardOptionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs agentIPWiring) func(daemon.BoardOptionRequest) error {
+func boardOptionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs agentIPWiring, egressBlocked daemon.EgressBlockProbe) func(daemon.BoardOptionRequest) error {
 	return func(req daemon.BoardOptionRequest) error {
-		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate, agentIPs)
+		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate, agentIPs, egressBlocked)
 		if err != nil {
 			return err
 		}
@@ -4438,9 +4461,9 @@ func boardOptionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, da
 	}
 }
 
-func boardFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs agentIPWiring) func(daemon.BoardFixRequest) error {
+func boardFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs agentIPWiring, egressBlocked daemon.EgressBlockProbe) func(daemon.BoardFixRequest) error {
 	return func(req daemon.BoardFixRequest) error {
-		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate, agentIPs)
+		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate, agentIPs, egressBlocked)
 		if err != nil {
 			return err
 		}
@@ -4452,9 +4475,9 @@ func boardFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemo
 // collaborators to a bug fix, but the entry point is the security-fix pipeline
 // (/human-security-fix) — a security-tuned triage/verify pass over the same
 // containerized agent path.
-func securityFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs agentIPWiring) func(daemon.SecurityFixRequest) error {
+func securityFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs agentIPWiring, egressBlocked daemon.EgressBlockProbe) func(daemon.SecurityFixRequest) error {
 	return func(req daemon.SecurityFixRequest) error {
-		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate, agentIPs)
+		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate, agentIPs, egressBlocked)
 		if err != nil {
 			return err
 		}

@@ -55,18 +55,18 @@ func (r *retryRecorder) policy(outcome StageExit, recorded bool) StageRetry {
 func TestClassifyRelaunch_ExitClasses(t *testing.T) {
 	// An agent that died before recording anything is the crash an automatic
 	// retry exists to absorb — bounded, so a vanished agent cannot loop forever.
-	require.Equal(t, relaunchBounded, classifyRelaunch("", false, false))
-	require.Equal(t, relaunchBounded, classifyRelaunch(ExitRetryable, true, false))
+	require.Equal(t, relaunchBounded, classifyRelaunch(relaunchFacts{Recorded: false}))
+	require.Equal(t, relaunchBounded, classifyRelaunch(relaunchFacts{Outcome: ExitRetryable, Recorded: true}))
 
 	// A substrate outage is its own kind: relaunched, but on the uncharged
 	// backoff path rather than against the bounded budget (SC-2307).
-	require.Equal(t, relaunchOutage, classifyRelaunch(ExitOutage, true, false))
+	require.Equal(t, relaunchOutage, classifyRelaunch(relaunchFacts{Outcome: ExitOutage, Recorded: true}))
 
 	// A stage that reached a deliberate conclusion must not be looped on.
-	require.Equal(t, relaunchNone, classifyRelaunch(ExitNeedsHumanWork, true, false))
+	require.Equal(t, relaunchNone, classifyRelaunch(relaunchFacts{Outcome: ExitNeedsHumanWork, Recorded: true}))
 	// needs-input is a person's only while a decision is actually open (F3).
-	require.Equal(t, relaunchNone, classifyRelaunch(ExitNeedsInput, true, true))
-	require.Equal(t, relaunchBounded, classifyRelaunch(ExitNeedsInput, true, false))
+	require.Equal(t, relaunchNone, classifyRelaunch(relaunchFacts{Outcome: ExitNeedsInput, Recorded: true, DecisionOpen: true}))
+	require.Equal(t, relaunchBounded, classifyRelaunch(relaunchFacts{Outcome: ExitNeedsInput, Recorded: true}))
 
 	// "done" is the contradiction: this classifier only runs on a stage already
 	// judged failed for finishing without its done-marker, so the agent claims
@@ -74,11 +74,11 @@ func TestClassifyRelaunch_ExitClasses(t *testing.T) {
 	// is incomplete and gets the same bounded relaunch as any other incomplete
 	// stage — it must NOT be filed alongside needs-human-work, which stranded
 	// planning runs that had a good plan and only missed the marker.
-	require.Equal(t, relaunchBounded, classifyRelaunch(ExitDone, true, false))
+	require.Equal(t, relaunchBounded, classifyRelaunch(relaunchFacts{Outcome: ExitDone, Recorded: true}))
 
 	// An outcome we do not recognise is deliberate output we cannot parse —
 	// retrying it would burn attempts to no purpose.
-	require.Equal(t, relaunchNone, classifyRelaunch("something-else", true, false))
+	require.Equal(t, relaunchNone, classifyRelaunch(relaunchFacts{Outcome: "something-else", Recorded: true}))
 }
 
 func TestTryRelaunch_RetryableStageIsRelaunchedAndNoted(t *testing.T) {
