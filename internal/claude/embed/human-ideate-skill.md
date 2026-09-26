@@ -15,7 +15,7 @@ Follow these steps in order:
 3. **Phase 1 -- Context & challenge**: Delegate to the **human-ideator** agent:
 
    ```
-   Task(subagent_type="human-ideator", prompt="Phase 1: Gather context and generate challenge questions for: $ARGUMENTS. Read the codebase, recent git history, and existing tickets for context. Return a context summary and 5 forcing questions.")
+   Task(subagent_type="human-ideator", model="opus", prompt="Phase 1: Gather context and generate challenge questions for: $ARGUMENTS. Read the codebase, recent git history, and existing tickets for context. Return a context summary and 5 forcing questions.")
    ```
 
 4. **Present** the agent's context summary to the user.
@@ -25,7 +25,7 @@ Follow these steps in order:
 6. **Phase 2 -- Scope decision**: Delegate to the **human-ideator** agent with the collected answers:
 
    ```
-   Task(subagent_type="human-ideator", prompt="Phase 2: Based on the challenge answers, propose scope. Answers: <paste all Q&A pairs>. Original idea: $ARGUMENTS. Return a problem statement, user story, acceptance criteria, and a scope recommendation (Expand / Hold / Reduce) with rationale.")
+   Task(subagent_type="human-ideator", model="opus", prompt="Phase 2: Based on the challenge answers, propose scope. Answers: <paste all Q&A pairs>. Original idea: $ARGUMENTS. Return a problem statement, user story, acceptance criteria, and a scope recommendation (Expand / Hold / Reduce) with rationale.")
    ```
 
 7. **Present** the scope recommendation to the user.
@@ -37,7 +37,7 @@ Follow these steps in order:
 10. **Phase 3 -- Create ticket**: Delegate to the **human-ideator** agent with the scope decision, tracker, and project:
 
     ```
-    Task(subagent_type="human-ideator", prompt="Phase 3: Create the PM ticket. Tracker: <tracker>. Project: <project>. Scope decision: <user's scope choice>. Problem statement, user story, and acceptance criteria from Phase 2: <paste Phase 2 output>. Create the ticket and add the challenge record as a comment.")
+    Task(subagent_type="human-ideator", model="sonnet", prompt="Phase 3: Create the PM ticket. Tracker: <tracker>. Project: <project>. Scope decision: <user's scope choice>. Problem statement, user story, and acceptance criteria from Phase 2: <paste Phase 2 output>. Create the ticket and add the challenge record as a comment.")
     ```
 
     When evolving an idea ticket, instruct the agent instead: "Phase 3: Evolve idea ticket <IDEA_KEY> in place — rewrite its title and description, remove the idea label, and add the challenge record as a comment." The key stays the same; no new ticket is created.

@@ -16,7 +16,7 @@ human pipeline init security
 ```
 
 ```
-Task(subagent_type="security-surface", prompt="Map the attack surface of this codebase. Write your report to .human/security/.security-surface.md")
+Task(subagent_type="security-surface", model="opus", prompt="Map the attack surface of this codebase. Write your report to .human/security/.security-surface.md")
 ```
 
 Wait for the surface mapper to finish before proceeding.
@@ -48,19 +48,19 @@ echo "Starting iteration $ITER_NUM with $BEFORE existing candidates"
 Launch all 7 scanning agents **in a single message** so they run in parallel:
 
 ```
-Task(subagent_type="security-injection", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Analyze the codebase for injection and input validation vulnerabilities. Report each new finding via `human pipeline append security` as described in your output format.")
+Task(subagent_type="security-injection", model="sonnet", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Analyze the codebase for injection and input validation vulnerabilities. Report each new finding via `human pipeline append security` as described in your output format.")
 
-Task(subagent_type="security-auth", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Analyze the codebase for authentication, authorization, and session management vulnerabilities. Report each new finding via `human pipeline append security` as described in your output format.")
+Task(subagent_type="security-auth", model="sonnet", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Analyze the codebase for authentication, authorization, and session management vulnerabilities. Report each new finding via `human pipeline append security` as described in your output format.")
 
-Task(subagent_type="security-secrets", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Scan the codebase and git history for leaked secrets, hardcoded credentials, and weak cryptography. Report each new finding via `human pipeline append security` as described in your output format.")
+Task(subagent_type="security-secrets", model="sonnet", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Scan the codebase and git history for leaked secrets, hardcoded credentials, and weak cryptography. Report each new finding via `human pipeline append security` as described in your output format.")
 
-Task(subagent_type="security-deps", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Audit dependencies for known vulnerabilities and supply chain risks. Report each new finding via `human pipeline append security` as described in your output format.")
+Task(subagent_type="security-deps", model="sonnet", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Audit dependencies for known vulnerabilities and supply chain risks. Report each new finding via `human pipeline append security` as described in your output format.")
 
-Task(subagent_type="security-infra", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Analyze configuration files, Dockerfiles, CI pipelines, and infrastructure settings for security misconfigurations. Report each new finding via `human pipeline append security` as described in your output format.")
+Task(subagent_type="security-infra", model="sonnet", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Analyze configuration files, Dockerfiles, CI pipelines, and infrastructure settings for security misconfigurations. Report each new finding via `human pipeline append security` as described in your output format.")
 
-Task(subagent_type="security-ssrf", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Analyze the codebase for server-side request forgery (SSRF) — user-controlled input reaching outbound request sinks, missing egress restrictions, and cloud metadata endpoint exposure. Report each new finding via `human pipeline append security` as described in your output format.")
+Task(subagent_type="security-ssrf", model="sonnet", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Analyze the codebase for server-side request forgery (SSRF) — user-controlled input reaching outbound request sinks, missing egress restrictions, and cloud metadata endpoint exposure. Report each new finding via `human pipeline append security` as described in your output format.")
 
-Task(subagent_type="security-deserialization", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Analyze the codebase for insecure deserialization and software/data-integrity failures — untrusted bytes into decoders, prototype pollution, unsigned artifacts, and dependency confusion. Report each new finding via `human pipeline append security` as described in your output format.")
+Task(subagent_type="security-deserialization", model="sonnet", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Analyze the codebase for insecure deserialization and software/data-integrity failures — untrusted bytes into decoders, prototype pollution, unsigned artifacts, and dependency confusion. Report each new finding via `human pipeline append security` as described in your output format.")
 ```
 
 Wait for all 7 agents to finish.
@@ -98,7 +98,7 @@ human pipeline state set security status chains
 Run the attack chain agent to connect individual findings into exploitable paths:
 
 ```
-Task(subagent_type="security-chains", prompt="Read all candidate findings from .human/security/.security-candidates.md and the attack surface map from .human/security/.security-surface.md. Trace data flows to build attack chains that connect individual candidate findings into exploitable paths. Reference candidates by their C-NNN IDs. Write your analysis to .human/security/.security-chains.md")
+Task(subagent_type="security-chains", model="opus", prompt="Read all candidate findings from .human/security/.security-candidates.md and the attack surface map from .human/security/.security-surface.md. Trace data flows to build attack chains that connect individual candidate findings into exploitable paths. Reference candidates by their C-NNN IDs. Write your analysis to .human/security/.security-chains.md")
 ```
 
 Wait for the chain analysis to finish before proceeding.

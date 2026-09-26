@@ -30,7 +30,7 @@ mkdir -p .human/features
 ```
 
 ```
-Task(subagent_type="features-recon", prompt="Survey this repository and build a feature inventory grounded in the code. Recency override (if any): $ARGUMENTS. Write your inventory to .human/features/.features-inventory.md")
+Task(subagent_type="features-recon", model="opus", prompt="Survey this repository and build a feature inventory grounded in the code. Recency override (if any): $ARGUMENTS. Write your inventory to .human/features/.features-inventory.md")
 ```
 
 Wait for the recon agent to finish before proceeding.
@@ -41,7 +41,7 @@ Run the synthesis agent to group the inventory, map tickets, mark recent feature
 file. Pass along the tracker roles resolved in Phase 0 so it can enrich ticket titles.
 
 ```
-Task(subagent_type="features-synthesis", prompt="Read the inventory at .human/features/.features-inventory.md and the existing FEATURE.json (if present). Produce a capability map framed for the product's actual audience — decide from the positioning whether that is consumers, integrating developers, or operators, and match their language. Infer 3–5 value pillars, organize capabilities as pillar › area › feature (aim for 3 levels), cut internal plumbing that audience wouldn't discuss, consolidate granular integrations into single capabilities, and use the audience's value language. Attach the tickets that created or changed each feature, mark recently changed ones, and write FEATURE.json to the repository root. PM tracker: <pm-tracker-or-none>. Engineering tracker: <eng-tracker-or-none>. Recency override (if any): $ARGUMENTS")
+Task(subagent_type="features-synthesis", model="opus", prompt="Read the inventory at .human/features/.features-inventory.md and the existing FEATURE.json (if present). Produce a capability map framed for the product's actual audience — decide from the positioning whether that is consumers, integrating developers, or operators, and match their language. Infer 3–5 value pillars, organize capabilities as pillar › area › feature (aim for 3 levels), cut internal plumbing that audience wouldn't discuss, consolidate granular integrations into single capabilities, and use the audience's value language. Attach the tickets that created or changed each feature, mark recently changed ones, and write FEATURE.json to the repository root. PM tracker: <pm-tracker-or-none>. Engineering tracker: <eng-tracker-or-none>. Recency override (if any): $ARGUMENTS")
 ```
 
 ## After completion

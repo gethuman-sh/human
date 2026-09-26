@@ -197,9 +197,11 @@ func TestModelCard_taskAliasesMatchTheTierFragment(t *testing.T) {
 }
 
 // The tier fragment names aliases in two places: the "Valid values are exactly"
-// sentence and the Task(…) examples above it. The repo-wide dispatch test walks
-// embed/*.md only, so an alias inside embed/shared/ is checked by nothing —
-// model-tiers.md:6 already carries model="sonnet" that neither test reads.
+// sentence and the Task(…) examples above it. TestPrompts_EveryDispatchNamesATier
+// now walks embed/shared/ too, so the example at model-tiers.md:6 is covered for
+// tier presence (SC-3583); this test keeps the fragment bound to the PRICE card —
+// an example naming a model models.json cannot price is what it exists to catch —
+// and pins that the example has not quietly been deleted.
 func TestModelCard_tierFragmentTaskExamplesUseKnownAliases(t *testing.T) {
 	body, err := os.ReadFile("embed/shared/model-tiers.md")
 	require.NoError(t, err)

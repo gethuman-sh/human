@@ -27,4 +27,4 @@ agent:
 
 `agent.model` is the **top-level** model an agent container starts with — the one a sub-agent dispatch inherits when it names none. Absent, containers run whatever the account defaults to, exactly as before.
 
-Lowering it is safe because it cannot silently demote a judgment: every dispatch the tier policy puts at the top tier names that tier explicitly (`internal/claude/embed/shared/model-tiers.md`), so it keeps running there whatever the container default is. A value this binary does not recognise is ignored — containers fall back to the account default — and `human config check` reports it.
+Lowering it is safe because it cannot silently demote a judgment: every dispatch the tool ships names its tier explicitly (`internal/claude/embed/shared/model-tiers.md`), enforced by `TestPrompts_EveryDispatchNamesATier`, so each one keeps running where the policy puts it whatever the container default is — and raising it cannot silently promote one either. A value this binary does not recognise is ignored — containers fall back to the account default — and `human config check` reports it.

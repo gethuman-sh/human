@@ -19,7 +19,7 @@ human pipeline state set bugs status running
 ```
 
 ```
-Task(subagent_type="findbugs-recon", prompt="Perform reconnaissance on this codebase. Write your recon report to .human/bugs/.findbugs-recon.md")
+Task(subagent_type="findbugs-recon", model="opus", prompt="Perform reconnaissance on this codebase. Write your recon report to .human/bugs/.findbugs-recon.md")
 ```
 
 Wait for the recon agent to finish before proceeding.
@@ -51,13 +51,13 @@ echo "Starting iteration $ITER_NUM (candidates so far: $BEFORE)"
 Launch all 4 analysis agents **in a single message** so they run in parallel:
 
 ```
-Task(subagent_type="findbugs-logic", prompt="Read the recon report at .human/bugs/.findbugs-recon.md and existing candidates at .human/bugs/.bugs-candidates.md. This is iteration ITER_NUM. Analyze the codebase for logic bugs. Report each NEW finding via `human pipeline append bugs` as described in your instructions.")
+Task(subagent_type="findbugs-logic", model="sonnet", prompt="Read the recon report at .human/bugs/.findbugs-recon.md and existing candidates at .human/bugs/.bugs-candidates.md. This is iteration ITER_NUM. Analyze the codebase for logic bugs. Report each NEW finding via `human pipeline append bugs` as described in your instructions.")
 
-Task(subagent_type="findbugs-errors", prompt="Read the recon report at .human/bugs/.findbugs-recon.md and existing candidates at .human/bugs/.bugs-candidates.md. This is iteration ITER_NUM. Analyze the codebase for error handling bugs. Report each NEW finding via `human pipeline append bugs` as described in your instructions.")
+Task(subagent_type="findbugs-errors", model="sonnet", prompt="Read the recon report at .human/bugs/.findbugs-recon.md and existing candidates at .human/bugs/.bugs-candidates.md. This is iteration ITER_NUM. Analyze the codebase for error handling bugs. Report each NEW finding via `human pipeline append bugs` as described in your instructions.")
 
-Task(subagent_type="findbugs-concurrency", prompt="Read the recon report at .human/bugs/.findbugs-recon.md and existing candidates at .human/bugs/.bugs-candidates.md. This is iteration ITER_NUM. Analyze the codebase for concurrency bugs. Report each NEW finding via `human pipeline append bugs` as described in your instructions.")
+Task(subagent_type="findbugs-concurrency", model="sonnet", prompt="Read the recon report at .human/bugs/.findbugs-recon.md and existing candidates at .human/bugs/.bugs-candidates.md. This is iteration ITER_NUM. Analyze the codebase for concurrency bugs. Report each NEW finding via `human pipeline append bugs` as described in your instructions.")
 
-Task(subagent_type="findbugs-api", prompt="Read the recon report at .human/bugs/.findbugs-recon.md and existing candidates at .human/bugs/.bugs-candidates.md. This is iteration ITER_NUM. Analyze the codebase for API and security bugs. Report each NEW finding via `human pipeline append bugs` as described in your instructions.")
+Task(subagent_type="findbugs-api", model="sonnet", prompt="Read the recon report at .human/bugs/.findbugs-recon.md and existing candidates at .human/bugs/.bugs-candidates.md. This is iteration ITER_NUM. Analyze the codebase for API and security bugs. Report each NEW finding via `human pipeline append bugs` as described in your instructions.")
 ```
 
 Wait for all 4 agents to finish.
