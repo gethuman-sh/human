@@ -181,7 +181,7 @@ human state get <BUG_KEY> stage.challenge --field challenge   # upheld | refuted
 ```
 
 - **UPHELD** — the verdict stands; act on it:
-  - **not-a-bug** — close the ticket with `human close <BUG_KEY>` (closed-type status, falling back to done-type when the workflow has none). Make **no code changes**. Post the terminal marker with `human marker post <BUG_KEY> no-fix-needed --field verdict=not-a-bug --field challenge=upheld`, then Report and STOP.
+  - **not-a-bug** — make **no code changes**. Post the terminal marker FIRST: `human marker post <BUG_KEY> no-fix-needed --field verdict=not-a-bug --field challenge=upheld`. Only once it is on the ticket, close it with `human close <BUG_KEY>` (closed-type status, falling back to done-type when the workflow has none). Then Report and STOP.
   - **undetermined** — make **no code changes**. Leave the ticket open for a human. Post the terminal marker with `human marker post <BUG_KEY> no-fix-needed --field verdict=undetermined --field challenge=upheld`, then Report and STOP.
 - **REFUTED** — the bug is real after all. Post the skeptic's evidence as a confirmed verdict on `<BUG_KEY>`:
 
@@ -193,6 +193,8 @@ human state get <BUG_KEY> stage.challenge --field challenge   # upheld | refuted
   ```
 
   Then **continue to Step 4 as a confirmed bug**, using the skeptic's reproduction as the reproduction. Do NOT close anything, do NOT post `[human:no-fix-needed]`. The challenge runs ONCE — a refuted verdict never loops back through triage.
+
+**The record comes before the close, always.** The marker is what the board reads to put the card on the resolved column and what a person re-opens from; the closed status is bookkeeping after it. Closing first and posting second means a refused or failed post leaves a closed ticket with no trace of why — three runs, twenty-five minutes and no result on LOC-34. If the `human close` fails after the marker is posted, the record already stands: say so in your report and STOP. Never fall back to a raw provider status command (`human local issue status …`, `human <tracker> issue status …`) — those are gated and prompt a person for a card that is already resolved.
 
 The `[human:no-fix-needed]` marker is **mandatory in board context**: the autofix pipeline runs under the board implementation-stage agent name, whose failure watcher treats any exit with no `[human:ready-for-review]` handoff as a crash and would loop forever re-triaging. This terminal marker signals the clean, resolved stop (ticket 405). Alongside it, record the stage outcome (`stage.implementation`, exit `done`, per "Recording the board stage outcome") so the daemon reads a resolved terminal rather than the generic diagnose line. The `human marker post` call above renders:
 

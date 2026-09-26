@@ -231,6 +231,74 @@ func TestStrict_admitsAMergeRecordedAfterAFailedDeploy(t *testing.T) {
 	assert.NoError(t, err, "the merge must be recordable after the failure")
 }
 
+// LOC-34, campaign run 5: a fix run whose first attempt failed is retried, the
+// retry's [human:implementation-started] fits both start-implementation and
+// start-fix-run, and replay pinned the alphabetically first of them. The
+// not-a-bug record only leaves `challenging`, on the branch replay discarded —
+// so the one marker that ends the run cleanly was refused, the run read as a
+// crash, and the ticket was left closed with no trace (SC-5839).
+func TestStrict_admitsTheNoFixRecordOfARetriedFixRun(t *testing.T) {
+	c := newStrictClient(t)
+	ctx := context.Background()
+	issue := create(t, c, "x")
+
+	for _, body := range []string{
+		"[human:claim]\nstage: implementation",
+		"[human:implementation-started]",
+		"[human:pipeline]\nkind: fix",
+		"[human:implementation-failed]\nreason: the container died",
+		"[human:claim]\nstage: implementation",
+		"[human:implementation-started]",
+		"[human:pipeline]\nkind: fix",
+		"[human:bug-verdict] not-a-bug\n\n## Explanation\nthe reported path cannot be reached",
+	} {
+		post(t, c, issue.Key, body)
+	}
+
+	_, err := c.AddComment(ctx, issue.Key, "[human:no-fix-needed]\nverdict: not-a-bug\nchallenge: upheld")
+	assert.NoError(t, err, "the verdict that ends the run must be recordable")
+}
+
+// The widening is per-branch, not a blanket amnesty: admitting a marker that
+// fits SOME reading of the history must not turn strict mode off for the rest of
+// the ticket's life. `deployed` fits no reading of a resolved-no-fix thread.
+func TestStrict_staysStrictAfterAnAmbiguousHistory(t *testing.T) {
+	c := newStrictClient(t)
+	ctx := context.Background()
+	issue := create(t, c, "x")
+
+	for _, body := range []string{
+		"[human:implementation-started]",
+		"[human:implementation-failed]\nreason: died",
+		"[human:implementation-started]",
+		"[human:bug-verdict] not-a-bug\n\n## Explanation\nx",
+		"[human:no-fix-needed]\nverdict: not-a-bug\nchallenge: upheld",
+	} {
+		post(t, c, issue.Key, body)
+	}
+
+	_, err := c.AddComment(ctx, issue.Key, "[human:deployed]\npr: https://example/pr/1\nsha: abc")
+	require.Error(t, err)
+}
+
+// A refusal whose facts live only in WithDetails structure reaches nobody: the
+// CLI prints the message and nothing else, so the agent saw a closed door with
+// no handle. The message has to name where the history puts the item and what
+// would have been accepted there (SC-5839).
+func TestStrict_theRefusalNamesWhereTheItemIsAndWhatItAccepts(t *testing.T) {
+	c := newStrictClient(t)
+	ctx := context.Background()
+	issue := create(t, c, "x")
+	post(t, c, issue.Key, "[human:planning-started]")
+
+	_, err := c.AddComment(ctx, issue.Key, "[human:deployed]\npr: https://example/pr/1\nsha: abc")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "deployed", "the refusal names what was refused")
+	assert.Contains(t, err.Error(), "planning", "the refusal names where the history puts the item")
+	assert.Contains(t, err.Error(), "plan-ready", "the refusal names a marker that would have been accepted")
+}
+
 func TestStrict_admitsWhenTheHistoryAlreadyLeftTheMachine(t *testing.T) {
 	lenient, _ := newTestClient(t)
 	ctx := context.Background()
