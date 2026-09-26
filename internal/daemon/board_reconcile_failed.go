@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -207,6 +208,9 @@ func recoverableFailure(comments []tracker.Comment, derived BoardCard, now time.
 	if silenceReapGaveUp(comments, stage) {
 		return false
 	}
+	if egressBlockedGaveUp(comments, stage) {
+		return false
+	}
 	state, failed := latestStateInStage(comments, stage)
 	if state != BoardFailed {
 		return false
@@ -225,4 +229,34 @@ func recoverableFailure(comments []tracker.Comment, derived BoardCard, now time.
 	}
 	age := now.Sub(failed.Created)
 	return age >= FailedRecoveryGrace && age <= FailedRecoveryBound
+}
+
+// egressBlockedGaveUp reports whether a stage's standing *-failed marker is
+// the one this daemon posted for a host its own proxy refused by policy
+// (egressBlockedMarker, board_egressblock.go). Both signals are required:
+// kind: unavailable-dependency alone is not enough, since any agent's
+// needs-human-work stop may legitimately carry that same vocabulary value for
+// an unrelated blocker (shared/exit-contract.md's kind is a closed set, not
+// this marker's alone) — egressBlockedSentinel is the wording only this
+// daemon's own composer writes.
+//
+// That marker is deliberately never relaunched — a policy denial does not
+// clear on its own, so the retry budget is never charged for it and nothing
+// keeps re-emitting the block once the container that hit it is gone. Without
+// this guard recoverableFailure has no durable memory of why the card is red:
+// it reads only the 15-minute recency window (FailedRecoveryGrace), which
+// lapses like any other failure's and hands the card straight back to
+// tryRelaunch — the uncharged re-drive the reclassification exists to stop,
+// resumed at ~2m backoff pacing instead (SC-5840).
+func egressBlockedGaveUp(comments []tracker.Comment, stage BoardStage) bool {
+	for _, c := range comments {
+		s, st, ok := ClassifyMarker(c.Body)
+		if !ok || s != stage || st != BoardFailed {
+			continue
+		}
+		if strings.Contains(c.Body, "kind: unavailable-dependency") && strings.Contains(c.Body, egressBlockedSentinel) {
+			return true
+		}
+	}
+	return false
 }

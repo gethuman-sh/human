@@ -118,6 +118,14 @@ func plausibleHost(h string) bool {
 	return true
 }
 
+// egressBlockedSentinel is the fixed substring egressBlockedMarker's headline
+// always carries, pinned here so recoverableFailure (board_reconcile_failed.go)
+// can recognize its own reclassification by content — kind: unavailable-dependency
+// alone is not enough, since any agent's needs-human-work stop may legitimately
+// carry that same vocabulary value for an unrelated blocker — without a second
+// author of the wording drifting out of sync with this one.
+const egressBlockedSentinel = "so the run reported an outage that no waiting can clear"
+
 // egressBlockedMarker composes the red a policy denial earns: the stage's own
 // *-failed marker with the blocker contract shared/exit-contract.md defines
 // for a stop only a person can release. Empty marker + nil order when stage
@@ -134,7 +142,7 @@ func egressBlockedMarker(stage BoardStage, blk EgressBlock) (marker.Marker, []st
 	}
 	at := blk.At.UTC().Format(time.RFC3339)
 	headline := "this host's proxy refused " + blk.Host +
-		", so the run reported an outage that no waiting can clear — add " + line +
+		", " + egressBlockedSentinel + " — add " + line +
 		" under proxy.domains in " + where + " and restart the daemon"
 	body := "The stage recorded exit: outage, which is what a blocked connection looks like from inside the container — " +
 		"the proxy closes it with no TLS alert. This daemon's own proxy recorded refusing the host at " + at +

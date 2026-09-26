@@ -674,6 +674,16 @@ func reconcileOutage(ctx context.Context, drivable DrivableCards, deps Reconcile
 			}
 			continue
 		}
+		// A stated machine-readable resume is classifyUnavailability's own
+		// diagnosis (a model-boundary pause), checked BEFORE the egress guard so
+		// a coincident proxy block on the host can never override it — the same
+		// exclusion explainedByEgressBlock applies on the live exit path. Once
+		// the stated wait has elapsed the card is treated like any other
+		// outage, including the egress check below (SC-5840).
+		if resume, ok := parseResume(derived); ok && now.Before(resume) {
+			// Still inside the stated wait — do not relaunch this tick.
+			continue
+		}
 		if over, handled := egressBlockedHandover(ctx, card, derived, deps, logger); handled {
 			handedOver += over
 			continue
@@ -685,10 +695,6 @@ func reconcileOutage(ctx context.Context, drivable DrivableCards, deps Reconcile
 		// (the SC-2856 refusal, never recorded via the retry policy) — and
 		// misclassifies an unrecorded outcome as relaunchBounded, charging the
 		// very budget an outage must never spend (SC-3024).
-		if resume, ok := parseResume(derived); ok && now.Before(resume) {
-			// Still inside the stated wait — do not relaunch this tick.
-			continue
-		}
 		if deps.Retry.relaunchOutage(card.Key, derived.Stage, logger) {
 			redriven++
 		}

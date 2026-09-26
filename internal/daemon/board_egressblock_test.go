@@ -183,6 +183,45 @@ func TestReconcileFailedStages_StillRedrivesARealOutage(t *testing.T) {
 	assert.Equal(t, 1, n)
 }
 
+// TestReconcileFailedStages_NeverRedrivesAnEgressBlockedRedPastTheWindow pins
+// the SC-5840 round-1 finding: the egress-blocked red carries no durable
+// memory of why it is red beyond the marker body itself, so once the
+// 15-minute recency window (FailedRecoveryGrace) lapses recoverableFailure
+// must still refuse it — otherwise the uncharged re-drive this reclassification
+// exists to stop resumes on its own, just paced by failedRecoveryBackoff
+// instead of the reconcile tick.
+func TestReconcileFailedStages_NeverRedrivesAnEgressBlockedRedPastTheWindow(t *testing.T) {
+	resetRecoveryBackoff(t)
+	now := time.Unix(100_000, 0)
+	m, order := egressBlockedMarker(BoardImplementation, EgressBlock{Host: "github.com", At: now.Add(-time.Hour), ConfigFile: "/proj/.humanconfig.yaml"})
+	body := markerBody(m, order...)
+	cards := []ReconcileCard{{
+		Key: "SC-1",
+		Comments: []tracker.Comment{
+			cmt(ImplementationStartedHeader, now.Add(-2*time.Hour)),
+			cmt(body, now.Add(-10*time.Minute)),
+		},
+	}}
+	attempts := 0
+	retry := StageRetry{
+		Max:      2,
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return ExitOutage, true },
+		Attempts: func(string, BoardStage) (int, error) { attempts++; return attempts, nil },
+		Relaunch: func(string, BoardStage) (bool, error) {
+			t.Fatal("must never relaunch an egress-blocked red")
+			return false, nil
+		},
+		// Nothing is running to re-emit the block, matching the reported
+		// incident: the container that hit it is long gone.
+		EgressBlocked: func(string) (EgressBlock, bool) { return EgressBlock{}, false },
+	}
+
+	n := reconcileFailedStages(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), Retry: retry, DaemonID: "d1"}, now)
+
+	assert.Equal(t, 0, n)
+	assert.Zero(t, attempts, "must never even consult the attempt count")
+}
+
 func TestReconcileOutage_ConvertsABlockedSubstrateDownCardToARed(t *testing.T) {
 	now := time.Unix(10_000, 0)
 	cards := []ReconcileCard{{
@@ -213,6 +252,43 @@ func TestReconcileOutage_ConvertsABlockedSubstrateDownCardToARed(t *testing.T) {
 	assert.Contains(t, posted[0].Body, "github.com")
 	assert.Contains(t, posted[0].Body, "/proj/.humanconfig.yaml")
 	assert.Empty(t, relaunched, "must never relaunch a blocked host")
+}
+
+// TestReconcileOutage_StatedResumeIsNeverOverriddenByACoincidentBlock pins the
+// SC-5840 round-1 finding: a card whose newest outage marker states a
+// machine-readable resume — classifyUnavailability's own model-boundary-pause
+// diagnosis — must not be reclassified into a policy-blocked red just because
+// this daemon's proxy also recorded refusing some host inside the window. The
+// stated wait is honoured until it elapses, exactly as it was before the
+// egress guard existed.
+func TestReconcileOutage_StatedResumeIsNeverOverriddenByACoincidentBlock(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	resume := now.Add(30 * time.Minute)
+	cards := []ReconcileCard{{
+		Key: "SC-1",
+		Comments: []tracker.Comment{
+			cmt(ImplementationStartedHeader, now.Add(-time.Hour)),
+			cmt(ImplementationOutageHeader+"\nmodel usage limit reached\nresume: "+resume.UTC().Format(time.RFC3339), now.Add(-time.Minute)),
+		},
+	}}
+	var relaunched []BoardStage
+	var posted []struct{ Key, Body string }
+	retry := StageRetry{
+		Max:      2,
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return ExitOutage, true },
+		Attempts: func(string, BoardStage) (int, error) { return 0, nil },
+		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
+		EgressBlocked: func(string) (EgressBlock, bool) {
+			return EgressBlock{Host: "github.com", At: now.Add(-time.Minute), ConfigFile: "/proj/.humanconfig.yaml"}, true
+		},
+	}
+
+	redriven, handedOver := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted), Retry: retry, DaemonID: "d1"}, now)
+
+	assert.Equal(t, 0, redriven, "still inside the stated wait")
+	assert.Equal(t, 0, handedOver, "a coincident proxy block must not reclassify a stated pause")
+	assert.Empty(t, posted)
+	assert.Empty(t, relaunched)
 }
 
 func TestReconcileOutage_RealOutageStillRelaunchesUncharged(t *testing.T) {
