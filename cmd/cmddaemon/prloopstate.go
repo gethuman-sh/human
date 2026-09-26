@@ -36,11 +36,11 @@ var (
 )
 
 // readPRReviewVerdict returns the machine reviewer's verdict recorded in
-// stage.pr-review, and whether a report was found at all. Absence is reported
-// separately from an empty verdict because they are different failures: a step
-// that recorded nothing died or never got that far, while a step that recorded
-// something unrecognized decided something the daemon cannot read. Both
-// escalate; only the message differs (SC-1892).
+// stage.pr-review, and the settled read that found it. Three states, not two:
+// nothing recorded, a record that is not this round's own write (SC-5554: the
+// step's agent may be confirmed gone, in which case the round is re-run rather
+// than escalated), and a record that IS this round's and would not decode
+// (which escalates immediately — see stageRead).
 //
 // The reviewer's report carries non-string fields (a blocking count), so it is
 // read into a typed struct with only the needed scalars rather than a
@@ -54,11 +54,12 @@ var (
 // notBefore anchors freshness (SC-2378): it is this round's own
 // pr-review-started marker time (daemon.LatestMarkerTime), obtained by the
 // caller from the comment thread. A record whose UpdatedAt predates it is a
-// previous round's leftover, not this round's verdict — fresh reports false
-// and the returned fields are left at their zero value so a caller cannot
-// accidentally act on them. The caller (advancePRLoopFunc) maps a recorded-
-// but-not-fresh read to PRLoopOutcome.ReviewStale, which the pure decider
-// escalates on rather than trusting.
+// previous round's leftover, not this round's verdict — read.fresh reports
+// false and the returned fields are left at their zero value so a caller
+// cannot accidentally act on them. The caller (advancePRLoopFunc) maps a
+// recorded-but-not-fresh read to PRLoopOutcome.ReviewStale, which the pure
+// decider treats as a dead step (re-run) or a racing writer (escalate)
+// depending on StepDead.
 //
 // exit and summary are the exit contract's, read exactly as readDeployFixReport
 // reads them. They are not a duplicate of the verdict: the reviewer records both
@@ -67,7 +68,7 @@ var (
 // verdict, which the loop escalates on instead of parking the card (SC-5627).
 // summary is what the outage has instead of a verdict, so it is what names the
 // unreachable substrate on the card (SC-5592's lesson).
-func readPRReviewVerdict(ctx context.Context, project, pmKey string, notBefore time.Time, logger zerolog.Logger) (verdict, head, findings, exit, summary string, recorded, fresh bool) {
+func readPRReviewVerdict(ctx context.Context, project, pmKey string, notBefore time.Time, logger zerolog.Logger) (verdict, head, findings, exit, summary string, read stageRead) {
 	var v struct {
 		Verdict  string `json:"verdict"`
 		Head     string `json:"head"`
@@ -75,21 +76,22 @@ func readPRReviewVerdict(ctx context.Context, project, pmKey string, notBefore t
 		Exit     string `json:"exit"`
 		Summary  string `json:"summary"`
 	}
-	recorded, fresh = readStageReportSettled(ctx, project, pmKey, "stage.pr-review", notBefore, &v, logger)
-	return v.Verdict, v.Head, v.Findings, v.Exit, v.Summary, recorded, fresh
+	read = readStageReportSettled(ctx, project, pmKey, "stage.pr-review", notBefore, &v, logger)
+	return v.Verdict, v.Head, v.Findings, v.Exit, v.Summary, read
 }
 
 // readPRFixReport loads the fixer's stage.pr-fix report: its exit, the optional
 // enumerated directions it recorded on needs-input, a one-line context — the
 // deferred findings note, or the summary (always the summary on an outage, whose
 // line names the unreachable substrate) — for the options block, the branch-tip
-// SHA it left behind (head — fed to the loop's convergence guard), plus whether a
-// report was found at all. Absent fields stay zero — the loop driver treats a
-// missing exit as escalate.
+// SHA it left behind (head — fed to the loop's convergence guard), plus the
+// settled read that found it. Absent fields stay zero — the loop driver treats
+// a missing exit as escalate, or as a dead-step re-run once the step's agent is
+// confirmed gone (SC-5554).
 //
-// notBefore/fresh follow readPRReviewVerdict's contract, anchored on this
+// notBefore/read follow readPRReviewVerdict's contract, anchored on this
 // round's pr-fix-started marker instead.
-func readPRFixReport(ctx context.Context, project, pmKey string, notBefore time.Time, logger zerolog.Logger) (exit string, options []daemon.BoardOption, summary, head string, recorded, fresh bool) {
+func readPRFixReport(ctx context.Context, project, pmKey string, notBefore time.Time, logger zerolog.Logger) (exit string, options []daemon.BoardOption, summary, head string, read stageRead) {
 	var v struct {
 		Exit     string               `json:"exit"`
 		Options  []daemon.BoardOption `json:"options"`
@@ -97,7 +99,7 @@ func readPRFixReport(ctx context.Context, project, pmKey string, notBefore time.
 		Summary  string               `json:"summary"`
 		Head     string               `json:"head"`
 	}
-	recorded, fresh = readStageReportSettled(ctx, project, pmKey, "stage.pr-fix", notBefore, &v, logger)
+	read = readStageReportSettled(ctx, project, pmKey, "stage.pr-fix", notBefore, &v, logger)
 	// deferred is the findings note the options block leads with, so it wins
 	// wherever there are findings to defer. An outage deferred nothing and its one
 	// line is the card's face — which substrate was unreachable — so there the
@@ -106,15 +108,15 @@ func readPRFixReport(ctx context.Context, project, pmKey string, notBefore time.
 	if v.Exit != string(daemon.ExitOutage) && v.Deferred != "" {
 		summary = v.Deferred
 	}
-	return v.Exit, v.Options, summary, v.Head, recorded, fresh
+	return v.Exit, v.Options, summary, v.Head, read
 }
 
-// readDeployFixReport returns the deploy fixer's stage.deploy-fix record: the exit
-// ("" when absent — the driver treats a non-done exit, including absence, as red),
-// the blocker a needs-human-work stop recorded, and the one-line summary. The
-// summary is what an OUTAGE has instead of a blocker — the exit contract gives an
-// outage no blocker — so it is what names the unreachable substrate on the card
-// (SC-5592).
+// readDeployFixReport returns the deploy fixer's stage.deploy-fix record: the
+// exit ("" when absent), the blocker a needs-human-work stop recorded, the
+// one-line summary, and Unconfirmed — whether NO record of THIS round's
+// dispatch was found (SC-5554). The summary is what an OUTAGE has instead of a
+// blocker — the exit contract gives an outage no blocker — so it is what names
+// the unreachable substrate on the card (SC-5592).
 //
 // notBefore anchors freshness the same way as the loop reads above.
 func readDeployFixReport(ctx context.Context, project, pmKey string, notBefore time.Time, logger zerolog.Logger) daemon.DeployFixReport {
@@ -123,11 +125,40 @@ func readDeployFixReport(ctx context.Context, project, pmKey string, notBefore t
 		Blocker daemon.Blocker `json:"blocker"`
 		Summary string         `json:"summary"`
 	}
-	_, _ = readStageReportSettled(ctx, project, pmKey, "stage.deploy-fix", notBefore, &v, logger)
-	// The state store hands back a bare string; this is the one place it becomes a
-	// StageExit, so the parse boundary is explicit rather than implied.
-	return daemon.DeployFixReport{Exit: daemon.StageExit(v.Exit), Blocker: v.Blocker, Summary: v.Summary}
+	read := readStageReportSettled(ctx, project, pmKey, "stage.deploy-fix", notBefore, &v, logger)
+	// Nothing recorded, or a record from an earlier dispatch: this round confirmed
+	// nothing, and the driver re-runs it rather than redding (SC-5554). A record
+	// that IS this round's and would not decode is NOT unconfirmed — that fixer
+	// reported — so it falls through to the red.
+	return daemon.DeployFixReport{
+		Exit:        daemon.StageExit(v.Exit),
+		Unconfirmed: !read.fresh && !read.unreadable,
+		Blocker:     v.Blocker,
+		Summary:     v.Summary,
+	}
 }
+
+// stageRead is what one settled read of a loop step's report found. Three
+// states, not two: a record that is not this round's and a record that is this
+// round's and will not decode both leave `fresh` false, and the loop must
+// answer them oppositely — the first is a write that may never come (re-run the
+// round), the second is a step that reported something unreadable (escalate).
+// Carried as one value so the three cannot be passed in the wrong order
+// (SC-5554).
+type stageRead struct {
+	// recorded: a record exists, of any freshness.
+	recorded bool
+	// fresh: the record found was confirmed to be this round's write AND decoded
+	// into out. Only then may out be read.
+	fresh bool
+	// unreadable: it was this round's write and json.Unmarshal rejected it. out
+	// may hold half a record — decoding stops at the error — so it is never read.
+	unreadable bool
+}
+
+// stale reports the record that is not this round's: recorded, not fresh, and
+// not a failed decode of this round's own write.
+func (r stageRead) stale() bool { return r.recorded && !r.fresh && !r.unreadable }
 
 // readStageReportSettled loads one loop step's JSON report from the agent
 // state store into out, re-reading with a bounded backoff while the record it
@@ -151,7 +182,7 @@ func readDeployFixReport(ctx context.Context, project, pmKey string, notBefore t
 // confirmed to be this round's; out is populated only when fresh, never on a
 // stale or unparseable record, so a caller cannot accidentally read stale
 // fields believing them current.
-func readStageReportSettled(ctx context.Context, project, pmKey, name string, notBefore time.Time, out any, logger zerolog.Logger) (recorded, fresh bool) {
+func readStageReportSettled(ctx context.Context, project, pmKey, name string, notBefore time.Time, out any, logger zerolog.Logger) stageRead {
 	var raw string
 	var updatedAt time.Time
 	read := func() bool {
@@ -171,12 +202,12 @@ func readStageReportSettled(ctx context.Context, project, pmKey, name string, no
 	}
 	isFresh := func() bool { return !updatedAt.Before(notBefore) }
 
-	recorded = read()
-	fresh = recorded && isFresh()
+	recorded := read()
+	fresh := recorded && isFresh()
 	for try := 0; !fresh && try < prLoopReadRecheckTries-1; try++ {
 		select {
 		case <-ctx.Done():
-			return recorded, fresh
+			return stageRead{recorded: recorded}
 		case <-time.After(prLoopReadRecheckStep):
 		}
 		recorded = read()
@@ -184,13 +215,13 @@ func readStageReportSettled(ctx context.Context, project, pmKey, name string, no
 	}
 
 	if !fresh {
-		return recorded, fresh
+		return stageRead{recorded: recorded}
 	}
 	if err := json.Unmarshal([]byte(raw), out); err != nil {
 		logger.Debug().Err(err).Str("pm", pmKey).Str("name", name).Msg("PR loop: unreadable stage report")
-		return recorded, false
+		return stageRead{recorded: recorded, unreadable: true}
 	}
-	return recorded, fresh
+	return stageRead{recorded: recorded, fresh: true}
 }
 
 // recordReviewRound writes a round's blocking findings to the durable findings
