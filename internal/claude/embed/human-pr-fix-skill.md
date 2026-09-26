@@ -4,6 +4,8 @@ description: Address a PR's review findings — dispatch the fixer to change the
 argument-hint: <key> --pr=<number> --branch=<branch>
 ---
 
+<!-- human:include launch-briefing -->
+
 `$ARGUMENTS` is `<KEY> --pr=<number> --branch=<branch>` — the PM ticket key, the open pull request whose review findings need addressing, and its branch. Parse them, then delegate to the **human-pr-fixer** agent.
 
 Run the fixer at the `sonnet` tier: implementing a fix is visible-failure work — a red re-review or a failed check catches what it misses — so the expensive tier is not warranted here.

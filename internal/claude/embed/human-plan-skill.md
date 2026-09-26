@@ -4,6 +4,8 @@ description: Fetch an issue tracker ticket and create an implementation plan
 argument-hint: <ticket-key>
 ---
 
+<!-- human:include launch-briefing -->
+
 **Take ownership first.** Run `human assign <KEY>` (the ticket key this skill received) so the ticket records who is working it. It only sets ownership — no status change, so it never blocks on an approval gate. A failure here is not fatal: say so and carry on with the work.
 
 # Implementation Plan Pipeline
@@ -16,7 +18,7 @@ Run `human mockups chosen <KEY>` (the PM key this skill received). If it prints 
 
 ## Phase 1: Draft Plan
 
-Run the planner agent. It returns the plan as its output (no files written):
+Run the planner agent. It returns the plan as its output (no files written). The planner has no files yet to run `human review findings` against, so it depends on this prompt: if this skill's own prompt carries a launch briefing (the `## Be aware of these before you change anything` section), append it verbatim to the end of the Task prompt below, heading included:
 
 ```
 Task(subagent_type="human-planner", model="opus", prompt="Create an implementation plan for ticket $ARGUMENTS. Return the complete plan as your output. Do not write any files.", run_in_background=false)
@@ -26,7 +28,7 @@ Wait for the planner agent to finish. Capture its output as `<PLAN_CONTENT>`.
 
 ## Phase 2: Verify (parallel)
 
-Launch both verification agents **in a single message** so they run in parallel. Pass the plan content inline using markers. Each agent returns its report as output (no files written):
+Launch both verification agents **in a single message** so they run in parallel. Pass the plan content inline using markers. Each agent returns its report as output (no files written). Append the launch briefing here too, same as Phase 1:
 
 ```
 Task(subagent_type="plan-verify-code", model="sonnet", prompt="Verify all code references in the following implementation plan against the actual codebase. Return your verification report as output. Do not write any files.\n\n---BEGIN PLAN---\n<PLAN_CONTENT>\n---END PLAN---", run_in_background=false)
@@ -61,7 +63,8 @@ passes every other check while the change it describes ships broken.
   `## Dependents` section (each with the query you ran and its `file:line`
   result), and add to `## Changes` whatever the unaccounted dependents require.
   Then re-run **plan-verify-code alone** on the repaired plan (the same Task
-  dispatch as Phase 2; plan-verify-docs does not need to run again).
+  dispatch as Phase 2, briefing appended the same way; plan-verify-docs does
+  not need to run again).
 
 Repeat that repair-and-re-verify at most **twice**. If the check still fails
 after the second re-verification, do not loop again and do not stop: mark each

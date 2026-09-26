@@ -4,6 +4,8 @@ description: Recover a failed deploy — dispatch the deploy fixer to rebase ont
 argument-hint: <key> --pr=<number> --branch=<branch>
 ---
 
+<!-- human:include launch-briefing -->
+
 `$ARGUMENTS` is `<KEY> --pr=<number> --branch=<branch>` — the PM ticket key, the open pull request whose deploy failed (a failing CI check a code change can turn green, or a rebase conflict against the base), and its branch. Parse them, then delegate to the **human-deploy-fixer** agent.
 
 Run the fixer at the `sonnet` tier: recovering a deploy is visible-failure work — the re-run deploy's CI gate catches what it misses — so the expensive tier is not warranted.

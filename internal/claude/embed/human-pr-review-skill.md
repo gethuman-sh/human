@@ -4,6 +4,8 @@ description: Run the machine PR review — dispatch the adversarial reviewer on 
 argument-hint: <key> --pr=<number> --branch=<branch>
 ---
 
+<!-- human:include launch-briefing -->
+
 `$ARGUMENTS` is `<KEY> --pr=<number> --branch=<branch>` — the PM ticket key, the open (draft) pull request to review, and its branch, all supplied by the daemon's deploy loop. Parse them, then delegate to the **human-pr-reviewer** agent.
 
 Run the reviewer at the `opus` tier: it is the adversarial gate before a merge, and a weaker model gets talked out of real objections, turning the check into a rubber stamp (never tier down an adversary). It stays at `opus` rather than joining the other adversaries at `fable` for one reason and it is not a judgement about the work: at 108 spawns this is the highest-volume dispatch in the pipeline, so moving it is a measurement someone has to take, not a call to make from the policy table.

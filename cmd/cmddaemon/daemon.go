@@ -184,8 +184,15 @@ type daemonState struct {
 	// every boardTransitionDepsFor call site shares one probe over one store
 	// rather than each reconstructing its own closure over the same data.
 	egressBlocked daemon.EgressBlockProbe
-	modelSink     *daemon.ModelOutcomeSink
-	agentIPs      *daemon.AgentIPRegistry
+	// findingsStore is the durable review record beside the search index,
+	// opened once: the PR loop writes rounds to it and the launch briefing
+	// reads them back (SC-5278, SC-5959). nil when it could not be opened;
+	// both users degrade to running without it.
+	findingsStore *recall.SQLiteStore
+	// launchAdvice is the briefing half over that store; nil disables it.
+	launchAdvice *launchAdvice
+	modelSink    *daemon.ModelOutcomeSink
+	agentIPs     *daemon.AgentIPRegistry
 	// inflightModelRequests and pendingModelRequests back the outstanding
 	// model-request signal (SC-3074): the per-agent open-request counter and
 	// its holding area for a mark that arrived before the agent's IP mapping
@@ -433,6 +440,8 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 	// (the description editor's host turns, board exits) and the doctor that
 	// reports them: a rejected refresh token is invisible in the store itself.
 	claudeRefusals := newClaudeAuthRefusals()
+	findingsStore := openFindingsStore(logger)
+	advice := newLaunchAdvice(findingsStore, claudeRefusals, logger)
 	doctor := daemon.NewDoctorRunner(buildDoctorChecks(projectRegistry, vaultResolver, doctorPersistence{
 		stats:    statsStore != nil,
 		audit:    auditStore != nil,
@@ -510,10 +519,10 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		AuditStore:             auditStore,
 		AgentCleaner:           &dockerAgentCleaner{},
 		VaultResolver:          vaultResolver,
-		BoardTransitioner:      boardTransitionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, ipWiring, egressBlocked),
-		BoardFixer:             boardFixerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, ipWiring, egressBlocked),
-		BoardSecurityFixer:     securityFixerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, ipWiring, egressBlocked),
-		BoardOptioner:          boardOptionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, ipWiring, egressBlocked),
+		BoardTransitioner:      boardTransitionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, ipWiring, egressBlocked, advice),
+		BoardFixer:             boardFixerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, ipWiring, egressBlocked, advice),
+		BoardSecurityFixer:     securityFixerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, ipWiring, egressBlocked, advice),
+		BoardOptioner:          boardOptionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, ipWiring, egressBlocked, advice),
 		BugCreator:             bugCreatorFunc(projectRegistry, vaultResolver, relateLauncherFunc(projectRegistry, daemonID, ipWiring)),
 		WhereComments:          whereCommentsFunc(projectRegistry, vaultResolver),
 		WhereAttempts: func(pmKey string, stage daemon.BoardStage) (int, error) {
@@ -547,6 +556,8 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		connTracker:           connTracker,
 		networkStore:          networkStore,
 		egressBlocked:         egressBlocked,
+		findingsStore:         findingsStore,
+		launchAdvice:          advice,
 		modelSink:             modelSink,
 		agentIPs:              agentIPs,
 		inflightModelRequests: inflightModelRequests,
@@ -822,14 +833,14 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	reviewLaunchGate := func(ctx context.Context) []daemon.DoctorCheck {
 		return ds.srv.Doctor.Blockers(ctx, daemon.LaunchRefusalChecks())
 	}
-	boardTransition := boardTransitionerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate, ipWiringFrom(ds), ds.egressBlocked)
+	boardTransition := boardTransitionerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate, ipWiringFrom(ds), ds.egressBlocked, ds.launchAdvice)
 	// A forwarded `human deploy` runs inside this process; handing it the same
 	// deps the board routes use is what lets it open the draft and launch the
 	// reviewer instead of merging on CI alone (F10).
 	ds.srv.TransitionDeps = func(pmKey string) (daemon.BoardTransitionDeps, error) {
-		return boardTransitionDepsFor(ds.srv.Projects, pmKey, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate, ipWiringFrom(ds), ds.egressBlocked)
+		return boardTransitionDepsFor(ds.srv.Projects, pmKey, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate, ipWiringFrom(ds), ds.egressBlocked, ds.launchAdvice)
 	}
-	boardRetryTransition := boardRetryTransitionerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate, ipWiringFrom(ds), ds.egressBlocked)
+	boardRetryTransition := boardRetryTransitionerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate, ipWiringFrom(ds), ds.egressBlocked, ds.launchAdvice)
 	// A finished build chains straight into its review — the board's
 	// auto-review; the transition engine re-derives and validates. Shared by
 	// the live hook path (RunBoardFailureWatch) and the durable restart-recovery
@@ -859,7 +870,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	// events, exactly like chainReviewWith: on each loop-agent exit read the outcome
 	// it recorded (the reviewer's verdict, the fixer's exit) from the state store
 	// and hand it to the loop executor, which decides the next step.
-	advancePRLoop := advancePRLoopFunc(ctx, ds, diagnoseFailure, reviewLaunchGate, openFindingsRecord(logger), logger)
+	advancePRLoop := advancePRLoopFunc(ctx, ds, diagnoseFailure, reviewLaunchGate, findingsRecorder(ds.findingsStore), logger)
 	// The deploy-fixer (SC-1557) is driven off its Stop event exactly like the PR
 	// loop: on exit read the report it recorded in stage.deploy-fix and hand it to
 	// AdvanceDeployFix, which re-runs Deploy on `done`, parks the card on an
@@ -4229,7 +4240,7 @@ func durableStageRetry(ctx context.Context, live daemon.StageRetry, reg *daemon.
 // is long gone (SC-1892).
 func advancePRLoopFunc(ctx context.Context, ds *daemonState, diagnose daemon.BoardFailureDiagnoser, reviewLaunchGate func(context.Context) []daemon.DoctorCheck, findingsRecord recall.FindingsRecorder, logger zerolog.Logger) func(pmKey, agentName, errorType string) error {
 	return func(pmKey, agentName, errorType string) error {
-		deps, err := boardTransitionDepsFor(ds.srv.Projects, pmKey, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate, ipWiringFrom(ds), ds.egressBlocked)
+		deps, err := boardTransitionDepsFor(ds.srv.Projects, pmKey, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate, ipWiringFrom(ds), ds.egressBlocked, ds.launchAdvice)
 		if err != nil {
 			return err
 		}
@@ -4289,15 +4300,26 @@ func advancePRLoopFunc(ctx context.Context, ds *daemonState, diagnose daemon.Boa
 	}
 }
 
-// openFindingsRecord opens the durable findings record beside the search index
+// openFindingsStore opens the durable findings record beside the search index
 // it shares a file with. The recall sync opens its own handle on that file;
 // SQLite serialises the two writers through WAL and busy_timeout, which the
-// store sets on open. A record that cannot be opened is logged and the loop
-// runs without one — the review's verdict does not depend on its archive.
-func openFindingsRecord(logger zerolog.Logger) recall.FindingsRecorder {
+// store sets on open. A record that cannot be opened is logged and the daemon
+// runs without one — neither the review's verdict nor a stage launch depends
+// on its archive.
+func openFindingsStore(logger zerolog.Logger) *recall.SQLiteStore {
 	store, err := recall.NewSQLiteStore(recall.DefaultDBPath())
 	if err != nil {
-		logger.Warn().Err(err).Msg("board PR loop: findings record unavailable; rounds will not be recorded")
+		logger.Warn().Err(err).Msg("findings record unavailable; review rounds will not be recorded and launches carry no briefing")
+		return nil
+	}
+	return store
+}
+
+// findingsRecorder narrows the shared store to the PR loop's write side, as a
+// nil interface when there is no store — a typed nil would pass every nil
+// check and panic on first use.
+func findingsRecorder(store *recall.SQLiteStore) recall.FindingsRecorder {
+	if store == nil {
 		return nil
 	}
 	return store
@@ -4309,7 +4331,7 @@ func openFindingsRecord(logger zerolog.Logger) recall.FindingsRecorder {
 // outage, or reds it on anything else.
 func advanceDeployFixFunc(ctx context.Context, ds *daemonState, launchGate func(context.Context) []daemon.DoctorCheck, logger zerolog.Logger) func(pmKey string) error {
 	return func(pmKey string) error {
-		deps, err := boardTransitionDepsFor(ds.srv.Projects, pmKey, ds.vaultResolver, ds.daemonID, logger, launchGate, ipWiringFrom(ds), ds.egressBlocked)
+		deps, err := boardTransitionDepsFor(ds.srv.Projects, pmKey, ds.vaultResolver, ds.daemonID, logger, launchGate, ipWiringFrom(ds), ds.egressBlocked, ds.launchAdvice)
 		if err != nil {
 			return err
 		}
@@ -4344,7 +4366,7 @@ func boardStateProject(reg *daemon.ProjectRegistry, pmKey string) string {
 // and the forge publisher against the resolved project dir. Shared by the
 // board-transition and board-fix closures so both routes drive the exact same
 // engine.
-func boardTransitionDepsFor(reg *daemon.ProjectRegistry, pmKey string, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs agentIPWiring, egressBlocked daemon.EgressBlockProbe) (daemon.BoardTransitionDeps, error) {
+func boardTransitionDepsFor(reg *daemon.ProjectRegistry, pmKey string, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs agentIPWiring, egressBlocked daemon.EgressBlockProbe, advice *launchAdvice) (daemon.BoardTransitionDeps, error) {
 	entry, err := reg.EntryForKey(pmKey)
 	if err != nil {
 		return daemon.BoardTransitionDeps{}, err
@@ -4419,15 +4441,16 @@ func boardTransitionDepsFor(reg *daemon.ProjectRegistry, pmKey string, resolver 
 		// answer as "not held" (SC-5691).
 		LiveAgents:    liveBoardAgents,
 		EgressBlocked: egressBlocked,
+		Feedback:      advice.feedbackFor(entry, boardStateProject(reg, pmKey), getter, commenter),
 	}, nil
 }
 
 // boardTransitionerFunc builds the daemon's BoardTransitioner closure: it
 // resolves the PM commenter by role per request and applies the transition with
 // the Docker launcher and forge publisher against the resolved project dir.
-func boardTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs agentIPWiring, egressBlocked daemon.EgressBlockProbe) func(daemon.BoardTransitionRequest) error {
+func boardTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs agentIPWiring, egressBlocked daemon.EgressBlockProbe, advice *launchAdvice) func(daemon.BoardTransitionRequest) error {
 	return func(req daemon.BoardTransitionRequest) error {
-		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate, agentIPs, egressBlocked)
+		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate, agentIPs, egressBlocked, advice)
 		if err != nil {
 			return err
 		}
@@ -4438,9 +4461,9 @@ func boardTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver
 // boardRetryTransitionerFunc is boardTransitionerFunc's retry twin: it reports
 // whether the relaunch actually LAUNCHED, so the retry accounting never charges an
 // attempt for a refusal that started nothing (SC-2989).
-func boardRetryTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs agentIPWiring, egressBlocked daemon.EgressBlockProbe) func(daemon.BoardTransitionRequest) (bool, error) {
+func boardRetryTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs agentIPWiring, egressBlocked daemon.EgressBlockProbe, advice *launchAdvice) func(daemon.BoardTransitionRequest) (bool, error) {
 	return func(req daemon.BoardTransitionRequest) (bool, error) {
-		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate, agentIPs, egressBlocked)
+		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate, agentIPs, egressBlocked, advice)
 		if err != nil {
 			return false, err
 		}
@@ -4453,9 +4476,9 @@ func boardRetryTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Res
 // (planning gate skipped — autofix triages, plans and fixes in one run).
 // boardOptionerFunc builds the daemon's BoardOptioner closure: it records a
 // chosen option and relaunches the block's stage with the choice injected.
-func boardOptionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs agentIPWiring, egressBlocked daemon.EgressBlockProbe) func(daemon.BoardOptionRequest) error {
+func boardOptionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs agentIPWiring, egressBlocked daemon.EgressBlockProbe, advice *launchAdvice) func(daemon.BoardOptionRequest) error {
 	return func(req daemon.BoardOptionRequest) error {
-		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate, agentIPs, egressBlocked)
+		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate, agentIPs, egressBlocked, advice)
 		if err != nil {
 			return err
 		}
@@ -4463,9 +4486,9 @@ func boardOptionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, da
 	}
 }
 
-func boardFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs agentIPWiring, egressBlocked daemon.EgressBlockProbe) func(daemon.BoardFixRequest) error {
+func boardFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs agentIPWiring, egressBlocked daemon.EgressBlockProbe, advice *launchAdvice) func(daemon.BoardFixRequest) error {
 	return func(req daemon.BoardFixRequest) error {
-		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate, agentIPs, egressBlocked)
+		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate, agentIPs, egressBlocked, advice)
 		if err != nil {
 			return err
 		}
@@ -4477,9 +4500,9 @@ func boardFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemo
 // collaborators to a bug fix, but the entry point is the security-fix pipeline
 // (/human-security-fix) — a security-tuned triage/verify pass over the same
 // containerized agent path.
-func securityFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs agentIPWiring, egressBlocked daemon.EgressBlockProbe) func(daemon.SecurityFixRequest) error {
+func securityFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs agentIPWiring, egressBlocked daemon.EgressBlockProbe, advice *launchAdvice) func(daemon.SecurityFixRequest) error {
 	return func(req daemon.SecurityFixRequest) error {
-		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate, agentIPs, egressBlocked)
+		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate, agentIPs, egressBlocked, advice)
 		if err != nil {
 			return err
 		}
@@ -5053,34 +5076,9 @@ func (r hostClaudeChatRunner) Run(ctx context.Context, resumeID, prompt string) 
 	if resumeID != "" {
 		args = append(args, "--resume", resumeID)
 	}
-	cmd := exec.CommandContext(ctx, "claude", args...) // #nosec G204 -- fixed binary, prompt is a discrete argv element
-	cmd.Dir = entry.Dir
-	out, err := cmd.Output()
-	// Live-verified (CLI 2.1.193): on turn failure claude exits non-zero,
-	// writes the result JSON with is_error:true and the cause in `result` to
-	// STDOUT, and leaves stderr empty. So the JSON parse below must run on
-	// both the success and the ExitError path; stderr is only meaningful for
-	// true exec failures (binary missing, process killed).
-	var parsed claudeTurnOutput
-	parseErr := json.Unmarshal(out, &parsed)
-	if parseErr == nil {
-		r.noteAuth(ctx, parsed)
-	}
-	if parseErr == nil && parsed.IsError {
-		return daemon.ChatTurn{}, errors.WithDetails(turnFailureMessage(parsed), "result", parsed.Result)
-	}
+	parsed, err := hostClaudeTurn(ctx, entry.Dir, args, r.refusals, r.storeStamp)
 	if err != nil {
-		if ctx.Err() != nil {
-			return daemon.ChatTurn{}, errors.WrapWithDetails(ctx.Err(), "agent turn timed out")
-		}
-		detail := ""
-		if ee, ok := goerrors.AsType[*exec.ExitError](err); ok {
-			detail = strings.TrimSpace(string(ee.Stderr))
-		}
-		return daemon.ChatTurn{}, errors.WrapWithDetails(err, "running agent turn"+withCause(detail), "stderr", detail)
-	}
-	if parseErr != nil {
-		return daemon.ChatTurn{}, errors.WrapWithDetails(parseErr, "parsing agent turn output")
+		return daemon.ChatTurn{}, err
 	}
 	return daemon.ChatTurn{Reply: parsed.Result, ResumeID: parsed.SessionID}, nil
 }
@@ -5126,16 +5124,7 @@ func firstLine(s string) string {
 // turn got past authentication, so it retires an earlier refusal. Other
 // failures say nothing about the login and leave the record as it is.
 func (r hostClaudeChatRunner) noteAuth(ctx context.Context, turn claudeTurnOutput) {
-	switch {
-	case turn.IsError && turn.APIErrorStatus == http.StatusUnauthorized:
-		stamp := time.Time{}
-		if r.storeStamp != nil {
-			stamp = r.storeStamp(ctx)
-		}
-		r.refusals.record(hostClaudeStore, stamp)
-	case !turn.IsError:
-		r.refusals.clear(hostClaudeStore)
-	}
+	noteHostClaudeAuth(ctx, turn, r.refusals, r.storeStamp)
 }
 
 // containerAuthRefusedFunc records a board run that died at Claude

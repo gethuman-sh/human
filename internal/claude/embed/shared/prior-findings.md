@@ -5,21 +5,25 @@ round, with what the fixer did about each. Nothing consulted them, so a file
 that drew the same finding on the last three tickets drew it again on the
 fourth — the machine paying for one lesson once per ticket.
 
-Before you change a file, ask:
+**Read the briefing first.** A stage the daemon launched carries a section
+headed `## Be aware of these before you change anything` at the end of its
+prompt, forwarded to you by the skill that dispatched you: the record, already
+distilled for this ticket and this stage. Read it before you change anything.
+It advises — no gate reads it, and nothing is blocked by what it says.
+
+**No briefing means ask.** A run started by hand, outside the board, carries
+none. Then, before you change a file, ask:
 
 ```bash
 human review findings <path> [<path> …] --key <TICKET_KEY>
 ```
 
 `--key` is how the answer finds the right project; pass the ticket you are
-working. The command advises — no gate reads it, and nothing is blocked by what
-it returns. "No prior findings recorded for these files." is a real answer, not
-a failure.
-
-Each finding comes back with the reviewer's class for it, the ticket and round
-it came from, and the fixer's disposition. A finding whose class you are about
-to re-create is the one to read twice: the reviewer will find it again, and the
-second time costs a review round.
+working. "No prior findings recorded for these files." is a real answer, not
+a failure. Each finding comes back with the reviewer's class for it, the
+ticket and round it came from, and the fixer's disposition. A finding whose
+class you are about to re-create is the one to read twice: the reviewer will
+find it again, and the second time costs a review round.
 
 **Say what you consulted.** For every file you touched, one line in the
 artifact your stage produces — the plan, the handoff notes, the commit message:

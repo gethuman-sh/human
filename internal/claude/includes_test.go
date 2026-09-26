@@ -155,3 +155,15 @@ func TestPlannerPlanFormatHasPriorFindingsSection(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(body), "## Prior Review Findings")
 }
+
+// The briefing rule is one fragment carried by every skill the daemon
+// dispatches, since the subagent that changes the code never sees the launch
+// prompt itself (SC-5959).
+func TestLaunchBriefingFragmentCarriesTheForwardingRule(t *testing.T) {
+	out, err := expandIncludes([]byte("<!-- human:include launch-briefing -->\n"))
+	require.NoError(t, err)
+	s := string(out)
+	require.Contains(t, s, "## Be aware of these before you change anything", "the fragment must name the heading the daemon appends")
+	require.Contains(t, s, "Forward it verbatim to every agent you dispatch", "the rule the fragment exists for")
+	require.Contains(t, s, "advice, not a gate", "the briefing gates nothing")
+}
