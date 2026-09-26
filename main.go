@@ -30,6 +30,7 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmddaemon"
 	"github.com/gethuman-sh/human/cmd/cmddeploy"
 	"github.com/gethuman-sh/human/cmd/cmddoctor"
+	"github.com/gethuman-sh/human/cmd/cmdfeedback"
 	"github.com/gethuman-sh/human/cmd/cmdfigma"
 	"github.com/gethuman-sh/human/cmd/cmdforge"
 	"github.com/gethuman-sh/human/cmd/cmdforward"
@@ -420,6 +421,12 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	fsmCmd := cmdfsm.BuildFSMCmd()
 	fsmCmd.GroupID = "utility"
 	rootCmd.AddCommand(fsmCmd)
+
+	// Asks the daemon's own record, runner and launch cache, so it forwards
+	// like fsm and is deliberately absent from localSubcommands.
+	feedbackCmd := cmdfeedback.BuildFeedbackCmd()
+	feedbackCmd.GroupID = "utility"
+	rootCmd.AddCommand(feedbackCmd)
 
 	agentContextCmd := cmdagentcontext.BuildAgentContextCmd()
 	agentContextCmd.GroupID = "utility"

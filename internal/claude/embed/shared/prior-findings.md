@@ -12,18 +12,26 @@ distilled for this ticket and this stage. Read it before you change anything.
 It advises — no gate reads it, and nothing is blocked by what it says.
 
 **No briefing means ask.** A run started by hand, outside the board, carries
-none. Then, before you change a file, ask:
+none. Then ask for the same briefing a launch would have carried:
+
+```bash
+human feedback <TICKET_KEY> <stage>   # planning, ticket-review, implementation, verification, prreview, prfix, deployfix
+```
+
+It prints the block under the same heading, or "No feedback for this stage."
+— a real answer, not a failure. For the files you are about to change, the
+record itself is one more command away:
 
 ```bash
 human review findings <path> [<path> …] --key <TICKET_KEY>
 ```
 
 `--key` is how the answer finds the right project; pass the ticket you are
-working. "No prior findings recorded for these files." is a real answer, not
-a failure. Each finding comes back with the reviewer's class for it, the
-ticket and round it came from, and the fixer's disposition. A finding whose
-class you are about to re-create is the one to read twice: the reviewer will
-find it again, and the second time costs a review round.
+working. "No prior findings recorded for these files." is likewise an answer.
+Each finding comes back with the reviewer's class for it, the ticket and
+round it came from, and the fixer's disposition. A finding whose class you
+are about to re-create is the one to read twice: the reviewer will find it
+again, and the second time costs a review round.
 
 **Say what you consulted.** For every file you touched, one line in the
 artifact your stage produces — the plan, the handoff notes, the commit message:
