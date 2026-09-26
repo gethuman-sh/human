@@ -1062,6 +1062,66 @@
       "doc": "One marker per stage. It costs no retry budget and the reconcile pass relaunches it each interval until the substrate returns. The deploy-fix step reaches it only from deploy-fixing: the post sits under the stageAlreadyFailed guard, so a done stage another actor already redded stays red rather than flipping back to waiting. The round it spent is given back — deployFixRounds discards a deploy-fix-started marker that a deploy-outage marker follows — so a persisting outage cannot exhaust the 2-round budget on rounds that attempted nothing. The PR review→fix loop reaches it from pr-review and pr-fix, on the DONE stage's own marker: the loop has none of its own and needs none, because substrate-down is stage-agnostic and redeploy-after-outage is already the way back in. Both posts sit under the same guard as the deploy fixer's — a done stage another actor already redded stays red rather than flipping back to waiting — and for the loop that guard reads the derived state, because the done stage has two failed markers and the loop's own is [human:pr-review-failed]. The round is given back the same way: chargedPRReviewRounds and deployFixRounds share one walk (roundsNetOfOutage) that discards a started marker a deploy-outage marker follows, so a persisting outage can exhaust neither the 2-round fix budget nor DefaultPRReviewRounds on rounds that attempted nothing (SC-5627). Narrowed by SC-5840 for the deploy-fix step: an outage this daemon's own proxy explains — a host it refused by policy, recorded as a `block` event within EgressBlockWindow — does not walk this edge at all. It takes one of the egress-blocked-by-policy-* events to stopped instead, because the substrate in that case is a line missing from a config file on this host and no wait can restore it; deployFixUnreachable splits that case off before calling doneStageOutage."
     },
     {
+      "name": "egress-blocked-by-policy-planning",
+      "src": [
+        "planning",
+        "substrate-down"
+      ],
+      "dst": "stopped",
+      "actor": "daemon",
+      "marker": "[human:planning-failed]",
+      "where": "internal/daemon/board_egressblock.go postEgressBlockedFailure, reached from board_outage.go handleOutageExit and board_reconcile.go reconcileOutage (a card already parked in substrate-down); board_retry.go classifyRelaunch returns relaunchNone for the same fact, so neither the live exit path nor reconcileFailedStages nor reconcileOneStuckCard re-drives it",
+      "doc": "The one ending that SAYS outage and is not one, for the planning stage. A host this daemon's own proxy refuses by policy is closed with no TLS alert, so inside the container it is byte-identical to a dead network and the agent honestly records exit: outage — and the uncharged outage re-drive then repeated a missing config line every reconcile tick for up to OutageWaitBound (six fixer containers in twelve minutes, SC-5840). The daemon held the block fact the whole time: its proxy emits a `block` event into the NetworkEventStore at the moment it refuses. Correlating the two within EgressBlockWindow reclassifies the stop: the stage's own *-failed marker, with the host and the exact proxy.domains line to add as the blocker's release condition, kind unavailable-dependency. It charges NOTHING and is said ONCE, under the same stageAlreadyFailed guard every other *-failed post takes. No relaunch follows: the release is a person editing .humanconfig.yaml and restarting the daemon. A model-boundary pause and an implausible refused host are deliberately NOT reclassified this way — see egress-blocked-by-policy-implementation's doc for the shared rationale, repeated once per stage-specific event so each carries its own precise src rather than one event spanning every stage's marker (a wide event pairing every src against every marker absorbed an unrelated corpus violation, implementation-failed@planning, SC-5840). Distinct from not_states / `a host that cannot launch`, which is the SAME condition caught BEFORE a stage starts (the egress doctor check, SC-4819): there no stage ran and no ticket is blamed, here a stage ran and reported what it saw.",
+      "prompt": "shared/exit-contract.md and human-deploy-fixer-agent.md — the `outage` row names the one case the daemon overrides"
+    },
+    {
+      "name": "egress-blocked-by-policy-implementation",
+      "src": [
+        "preflight",
+        "triaging",
+        "challenging",
+        "fix-planning",
+        "fixing",
+        "verifying",
+        "implementing",
+        "substrate-down"
+      ],
+      "dst": "stopped",
+      "actor": "daemon",
+      "marker": "[human:implementation-failed]",
+      "where": "internal/daemon/board_egressblock.go postEgressBlockedFailure, reached from board_outage.go handleOutageExit and board_reconcile.go reconcileOutage (a card already parked in substrate-down); board_retry.go classifyRelaunch returns relaunchNone for the same fact, so neither the live exit path nor reconcileFailedStages nor reconcileOneStuckCard re-drives it",
+      "doc": "The one ending that SAYS outage and is not one, for the implementation stage — the incident's own route (SC-5840): six fixer containers in twelve minutes, each honestly reporting outage while `github.com` sat outside a wildcard-only allowlist. The daemon held the block fact the whole time: its proxy emits a `block` event into the NetworkEventStore the moment it refuses a host. Correlating the two within EgressBlockWindow reclassifies the stop: the stage's own *-failed marker, with the host and the exact proxy.domains line to add as the blocker's release condition, kind unavailable-dependency. It charges NOTHING — an outage never spends the budget a real failure needs, and this is not a failure of the work either — and it is said ONCE, under the same stageAlreadyFailed guard every other *-failed post takes. No relaunch follows, because a policy denial does not come back on its own, and that refusal is PERMANENT rather than time-bound: recoverableFailure (board_reconcile_failed.go) reads egressBlockedGaveUp before it reads the stage's own age window, so the ordinary retry paths never resume on this marker even after the block record itself has aged out or a restart has cleared it from memory — the release is a person editing proxy.domains, restarting the daemon, and then issuing the stage's own Retry gesture, which is the same in-place relaunch every other stopped card takes. Two endings are deliberately NOT reclassified: a model-boundary pause (rate limit, overloaded, 5xx, auth refusal), which classifyUnavailability has already diagnosed from the hook's own errorType, and an ending whose refused host is not a plausible hostname — the SNI is container-controlled bytes and is discarded rather than printed into a marker body. Split into one event per stage, matching the src groups the ordinary implementation-failed/planning-failed/review-failed/deploy-failed events already use, rather than one event spanning every stage against every marker: the wider shape (mirroring substrate-unreachable's) let `Accepts(\"planning\", \"implementation-failed\")` become true and silently absorbed an unrelated, already-documented corpus violation. Distinct from not_states / `a host that cannot launch`, which is the SAME condition caught BEFORE a stage starts (the egress doctor check, SC-4819): there no stage ran and no ticket is blamed, here a stage ran and reported what it saw.",
+      "prompt": "shared/exit-contract.md and human-deploy-fixer-agent.md — the `outage` row names the one case the daemon overrides"
+    },
+    {
+      "name": "egress-blocked-by-policy-verification",
+      "src": [
+        "in-review",
+        "substrate-down"
+      ],
+      "dst": "stopped",
+      "actor": "daemon",
+      "marker": "[human:review-failed]",
+      "where": "internal/daemon/board_egressblock.go postEgressBlockedFailure, reached from board_outage.go handleOutageExit and board_reconcile.go reconcileOutage (a card already parked in substrate-down); board_retry.go classifyRelaunch returns relaunchNone for the same fact, so neither the live exit path nor reconcileFailedStages nor reconcileOneStuckCard re-drives it",
+      "doc": "The one ending that SAYS outage and is not one, for the verification stage. See egress-blocked-by-policy-implementation's doc for the full rationale (SC-5840): the daemon's own proxy block record reclassifies the stop into the stage's own *-failed marker, uncharged and said once, with no relaunch until a person edits proxy.domains, restarts the daemon, and Retries the stage — egressBlockedGaveUp holds that refusal even past a restart or the block record's own aging out.",
+      "prompt": "shared/exit-contract.md and human-deploy-fixer-agent.md — the `outage` row names the one case the daemon overrides"
+    },
+    {
+      "name": "egress-blocked-by-policy-deploy",
+      "src": [
+        "deploying",
+        "ci-gate",
+        "deploy-fixing",
+        "substrate-down"
+      ],
+      "dst": "stopped",
+      "actor": "daemon",
+      "marker": "[human:deploy-failed]",
+      "where": "internal/daemon/board_egressblock.go postEgressBlockedFailure, reached from board_transition.go AdvanceDeployFix → deployFixUnreachable (the deploy-fix step, whose exit driveDeployFixExit claims before the generic gate can see it) and board_reconcile.go reconcileOutage (a card already parked in substrate-down); board_retry.go classifyRelaunch returns relaunchNone for the same fact, so neither the live exit path nor reconcileFailedStages nor reconcileOneStuckCard re-drives it",
+      "doc": "The one ending that SAYS outage and is not one, for the done stage — reached even before the generic outage gate, since driveDeployFixExit claims a deploy-fixer's exit first (deployFixUnreachable splits a policy-refused host off deployFixOutage). See egress-blocked-by-policy-implementation's doc for the full rationale (SC-5840): the daemon's own proxy block record reclassifies the stop into the stage's own *-failed marker, uncharged and said once, with no relaunch until a person edits proxy.domains, restarts the daemon, and Retries the stage — egressBlockedGaveUp holds that refusal even past a restart or the block record's own aging out.",
+      "prompt": "shared/exit-contract.md, human-deploy-fixer-agent.md and human-deploy-fix-skill.md — the `outage` row names the one case the daemon overrides"
+    },
+    {
       "name": "launch-refused-no-plan",
       "src": [
         "implementing",
