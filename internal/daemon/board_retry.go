@@ -32,6 +32,15 @@ const (
 	// attempted, so it is relaunched with backoff and NEVER charged against
 	// DefaultStageRetries (SC-2307). Distinct from ExitRetryable, which is a
 	// flake or a dead container that a bounded, immediate relaunch absorbs.
+	//
+	// ONE case of it is not an outage at all, and the daemon — not the agent —
+	// is the only party that can tell: a host this daemon's own proxy refused by
+	// policy closes the connection with no TLS alert, so from inside the
+	// container it is indistinguishable from a dead network and the agent
+	// honestly records this value. Such an ending is reclassified against the
+	// proxy's own block events (StageRetry.EgressBlocked, board_egressblock.go)
+	// and reds once naming the host and the config line, because no amount of
+	// waiting clears a config gap (SC-5840).
 	ExitOutage StageExit = "outage"
 )
 
@@ -160,6 +169,12 @@ type StageRetry struct {
 	// be a refusal (nothing launched). Optional/nil-safe: an unset Uncount leaves
 	// the counter as-is, matching the previous behaviour.
 	Uncount func(pmKey string, stage BoardStage)
+	// EgressBlocked reports a policy denial this daemon's proxy recorded that
+	// can explain an ExitOutage ending. It is a CLASSIFICATION input, not a
+	// relaunch collaborator: an outage it answers for is deterministic, so no
+	// path may re-drive it. nil disables the correlation (pre-SC-5840
+	// behaviour), and enabled() deliberately does not require it.
+	EgressBlocked EgressBlockProbe
 	// Max bounds automatic relaunches; zero means DefaultStageRetries.
 	Max int
 }
@@ -189,6 +204,23 @@ const (
 	relaunchOutage                      // substrate down: uncharged, reconcile-backoff relaunch
 )
 
+// relaunchFacts is everything the relaunch decision is made from. A value
+// rather than a fourth positional bool, for the reason DeployFixReport's doc
+// gives: four bools at a call site says nothing about which is which.
+type relaunchFacts struct {
+	// Outcome and Recorded are the stage's own exit report.
+	Outcome  StageExit
+	Recorded bool
+	// DecisionOpen is whether an open, unanswered [human:options] block naming
+	// this stage or an earlier one stands on the ticket.
+	DecisionOpen bool
+	// EgressBlocked is whether this daemon's proxy refused a host in the run's
+	// window. It makes an ExitOutage DETERMINISTIC: the thing that was
+	// unreachable is a line missing from a config file on this host, so the
+	// uncharged re-drive would repeat forever and change nothing (SC-5840).
+	EgressBlocked bool
+}
+
 // classifyRelaunch decides, from the recorded exit and whether a decision is
 // open on the ticket, how (if at all) a failed stage is relaunched.
 //
@@ -196,10 +228,13 @@ const (
 // which is exactly the crash an automatic retry exists to absorb, and the
 // attempt cap keeps a vanished agent from looping unbounded — an undiagnosed
 // crash must never be mistaken for an outage's indefinite backoff. A recorded
-// ExitOutage is the substrate being down, relaunched uncharged. ExitRetryable is
-// a flake, relaunched charged. Anything else is a deliberate exit we do not
-// recognise and is left for a human rather than looped on a sentence we cannot
-// parse.
+// ExitOutage is the substrate being down, relaunched uncharged — UNLESS this
+// daemon's own proxy explains it (EgressBlocked), in which case it is nobody's
+// relaunch: the card has already been redded with the host and the config line
+// named (board_egressblock.go), and re-driving it would only repeat the same
+// config gap (SC-5840). ExitRetryable is a flake, relaunched charged. Anything
+// else is a deliberate exit we do not recognise and is left for a human rather
+// than looped on a sentence we cannot parse.
 //
 // ExitDone is the contradiction case, and it is relaunched rather than left red.
 // This classifier only runs once a stage has already been judged failed for
@@ -222,8 +257,8 @@ const (
 // one the stage takes the bounded relaunch like any other incomplete ending, and
 // reds past the budget with the attempts on record. ExitNeedsHumanWork stays a
 // person's: it names a blocker, not a question, and no marker can verify it.
-func classifyRelaunch(outcome StageExit, recorded, decisionOpen bool) relaunchKind {
-	if !recorded {
+func classifyRelaunch(f relaunchFacts) relaunchKind {
+	if !f.Recorded {
 		return relaunchBounded
 	}
 	// Every member is listed on purpose, and the linter enforces it: adding a
@@ -231,13 +266,19 @@ func classifyRelaunch(outcome StageExit, recorded, decisionOpen bool) relaunchKi
 	// shipped once. The `default` stays as a runtime guard for a value read off
 	// the wire that the type system never saw.
 	//exhaustive:enforce
-	switch outcome {
+	switch f.Outcome {
 	case ExitOutage:
+		if f.EgressBlocked {
+			// Not a wait: the substrate is a policy on this host, and it returns
+			// only when a person edits the config. The card has been redded with
+			// the host and the config line named (board_egressblock.go).
+			return relaunchNone
+		}
 		return relaunchOutage
 	case ExitRetryable, ExitDone:
 		return relaunchBounded
 	case ExitNeedsInput:
-		if decisionOpen {
+		if f.DecisionOpen {
 			return relaunchNone
 		}
 		return relaunchBounded
@@ -261,6 +302,16 @@ func (r StageRetry) uncount(pmKey string, stage BoardStage) {
 	if r.Uncount != nil {
 		r.Uncount(pmKey, stage)
 	}
+}
+
+// egressBlock asks the probe, nil-safe. Only ever consulted for an ending that
+// already classified as an outage: a policy block cannot explain an ending that
+// was never about reachability.
+func (r StageRetry) egressBlock(pmKey string) (EgressBlock, bool) {
+	if r.EgressBlocked == nil {
+		return EgressBlock{}, false
+	}
+	return r.EgressBlocked(pmKey)
 }
 
 // tryRelaunch decides and, when warranted, relaunches the stage. It reports
@@ -297,8 +348,11 @@ func (r StageRetry) tryRelaunch(ctx context.Context, pmKey string, stage BoardSt
 	// (SC-1669/SC-2137). A block naming a later stage, or malformed, must not
 	// read as a decision open on THIS stage — using the raw predicate here made
 	// the two disagree on exactly that case.
-	decisionOpen := stagePausedOnOptions(comments, stage)
-	switch classifyRelaunch(outcome, recorded, decisionOpen) {
+	facts := relaunchFacts{Outcome: outcome, Recorded: recorded, DecisionOpen: stagePausedOnOptions(comments, stage)}
+	if outcome == ExitOutage && recorded {
+		_, facts.EgressBlocked = r.egressBlock(pmKey)
+	}
+	switch classifyRelaunch(facts) {
 	case relaunchNone:
 		logger.Info().Str("pm", pmKey).Str("stage", string(stage)).Str("exit", string(outcome)).
 			Msg("board retry: stage exit is not retryable, leaving the card for a human")
@@ -420,6 +474,10 @@ func (r StageRetry) relaunchBounded(ctx context.Context, pmKey string, stage Boa
 // happens: the standing *-outage marker is the one statement that the machine
 // is waiting, and it stays current on its own (SC-2851 — this path used to
 // leave one note per attempt, which is how a weekend produced hundreds).
+//
+// Never reached for an outage this daemon's own proxy explains — classifyRelaunch
+// routes a policy denial to relaunchNone, because re-driving a config gap
+// repeats it (SC-5840).
 func (r StageRetry) relaunchOutage(pmKey string, stage BoardStage, logger zerolog.Logger) bool {
 	launched, err := r.Relaunch(pmKey, stage)
 	if err != nil {
@@ -472,6 +530,9 @@ func (r StageRetry) relaunchSilenceReap(pmKey string, stage BoardStage, logger z
 // live exit handler consults BEFORE it composes any marker, so an outage is
 // routed to its own *-outage marker instead of a *-failed one. False when retry
 // is unwired, so an unconfigured StageRetry keeps prior behaviour.
+//
+// It answers only whether the value was recorded; whether that outage is a
+// real one is classifyRelaunch's question.
 func (r StageRetry) recordedOutage(pmKey string, stage BoardStage) bool {
 	if !r.enabled() || r.Outcome == nil {
 		return false

@@ -333,7 +333,7 @@ func reconcileOnce(ctx context.Context, deps ReconcileDeps) {
 	// machine exactly as a stuck-running reclaim does.
 	if redriven, handedOver := reconcileOutage(ctx, gate.forTakeover(cards), deps, time.Now()); redriven > 0 || handedOver > 0 {
 		logger.Info().Int("redriven", redriven).Int("handed_over", handedOver).
-			Msg("board reconcile: re-drove stages waiting on the substrate")
+			Msg("board reconcile: re-drove stages waiting on the substrate, or told a person about one that is not waiting")
 	}
 	if n := reconcileStuckRunning(ctx, gate.forTakeover(cards), deps, time.Now()); n > 0 {
 		logger.Info().Int("reddened", n).Msg("board reconcile: reddened stuck-running cards with no live agent")
@@ -635,6 +635,11 @@ func reconcilePRLoops(ctx context.Context, drivable DrivableCards, deps Reconcil
 // ever told the difference (SC-2851). The handover reds the card and still
 // charges nothing.
 //
+// Not every card standing on an outage marker is waiting on a substrate. One
+// whose host this daemon's proxy refused by policy is converted to a red
+// naming the host and the config line and never re-driven (SC-5840); it is
+// counted with the wait-bound handovers, which is what it is.
+//
 // A live agent for the stage means the relaunch already happened this cycle, so
 // the card is left alone rather than racing a second launch onto the same stage
 // — the same alive-guard reconcilePRLoops and reconcileStuckRunning use. nil
@@ -665,6 +670,19 @@ func reconcileOutage(ctx context.Context, drivable DrivableCards, deps Reconcile
 		}
 		if since, ok := outageRunSince(card.Comments, derived.Stage); ok && deps.PostFailed != nil && now.Sub(since) > OutageWaitBound {
 			if handOverOutage(ctx, card.Key, derived, deps, now.Sub(since), since) {
+				handedOver++
+			}
+			continue
+		}
+		// A host this daemon's own proxy refused is not a substrate to wait for:
+		// it comes back only when a person edits proxy.domains, so the uncharged
+		// re-drive would repeat a config gap at the reconcile interval for six
+		// hours — which is exactly what it did (SC-5840). Converting the card to
+		// a red here is what reaches a card parked before this daemon learned the
+		// difference. Counted as a handover because that is what it is: the wait
+		// is ended and a person is told, charging nothing.
+		if blk, ok := deps.Retry.egressBlock(card.Key); ok {
+			if postEgressBlockedFailure(ctx, card.Key, derived.Stage, card.Comments, blk, deps.PostFailed, logger) {
 				handedOver++
 			}
 			continue

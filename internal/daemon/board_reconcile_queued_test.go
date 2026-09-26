@@ -61,7 +61,7 @@ func TestReconcileQueuedLaunch_StartsDespiteANeedsInputExit(t *testing.T) {
 	var relaunched []BoardStage
 	attempts := 0
 	retry := queuedRetry(&relaunched, &attempts)
-	require.Equal(t, relaunchNone, classifyRelaunch(ExitNeedsInput, true, true),
+	require.Equal(t, relaunchNone, classifyRelaunch(relaunchFacts{Outcome: ExitNeedsInput, Recorded: true, DecisionOpen: true}),
 		"precondition: with a decision open this exit is the one tryRelaunch refuses to act on")
 
 	n := reconcileQueuedLaunch(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), Retry: retry, DaemonID: "d1"}, now)
