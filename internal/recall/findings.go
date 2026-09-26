@@ -219,3 +219,39 @@ func scanReviewFindings(rows *sql.Rows) ([]ReviewFinding, error) {
 	}
 	return out, rows.Err()
 }
+
+// RecentFindings returns a project's newest findings regardless of file — the
+// project-wide layer of the launch-time advice (SC-5959): a class the project
+// keeps paying for on files the current stage will not touch is still the one
+// the current stage is likeliest to draw next.
+func (s *SQLiteStore) RecentFindings(ctx context.Context, project string, limit int) ([]ReviewFinding, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT project, key, pr, round, head, file, slug, class, text, disposition, note, recorded_at
+		FROM review_findings WHERE project = ?
+		ORDER BY recorded_at DESC, id DESC
+		LIMIT ?`, project, limit)
+	if err != nil {
+		return nil, errors.WrapWithDetails(err, "read recent review findings")
+	}
+	defer func() { _ = rows.Close() }()
+	return scanReviewFindings(rows)
+}
+
+// LatestFindingID is the record's high-water mark for a project: the newest
+// row id, 0 when the project has none. It is what invalidates a cached advice
+// block — a relaunch with no new finding must not pay for a second model call,
+// and a new row must (SC-5959).
+func (s *SQLiteStore) LatestFindingID(ctx context.Context, project string) (int64, error) {
+	var id sql.NullInt64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT MAX(id) FROM review_findings WHERE project = ?`, project).Scan(&id); err != nil {
+		return 0, errors.WrapWithDetails(err, "read latest finding id")
+	}
+	if !id.Valid {
+		return 0, nil
+	}
+	return id.Int64, nil
+}

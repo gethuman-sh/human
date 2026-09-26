@@ -162,3 +162,56 @@ func TestFindingsForFiles_severalPathsAtOnce(t *testing.T) {
 	files := []string{got[0].File, got[1].File}
 	assert.ElementsMatch(t, []string{"a.go", "c.go"}, files)
 }
+
+func TestRecentFindings_projectWideNewestFirst(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, s.RecordReviewFindings(ctx, []ReviewFinding{
+		{Project: "p", Key: "SC-1", PR: 7, Round: 1, File: "a.go", Slug: "first", Class: "tests"},
+		{Project: "p", Key: "SC-2", PR: 8, Round: 1, File: "b.go", Slug: "second", Class: "docs"},
+		{Project: "other", Key: "SC-3", PR: 9, Round: 1, File: "c.go", Slug: "elsewhere", Class: "docs"},
+	}))
+
+	got, err := s.RecentFindings(ctx, "p", 0)
+	require.NoError(t, err)
+	require.Len(t, got, 2, "projects do not share findings")
+	assert.Equal(t, "second", got[0].Slug, "newest first")
+
+	got, err = s.RecentFindings(ctx, "p", 1)
+	require.NoError(t, err)
+	assert.Len(t, got, 1, "the limit bounds the answer")
+
+	got, err = s.RecentFindings(ctx, "empty", 0)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+func TestLatestFindingID_highWaterMarkPerProject(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	id, err := s.LatestFindingID(ctx, "p")
+	require.NoError(t, err)
+	assert.Zero(t, id, "no rows yet")
+
+	require.NoError(t, s.RecordReviewFindings(ctx, []ReviewFinding{
+		{Project: "p", Key: "SC-1", PR: 7, Round: 1, File: "a.go", Slug: "first"},
+	}))
+	first, err := s.LatestFindingID(ctx, "p")
+	require.NoError(t, err)
+	assert.Positive(t, first)
+
+	require.NoError(t, s.RecordReviewFindings(ctx, []ReviewFinding{
+		{Project: "other", Key: "SC-2", PR: 8, Round: 1, File: "b.go", Slug: "second"},
+	}))
+	again, err := s.LatestFindingID(ctx, "p")
+	require.NoError(t, err)
+	assert.Equal(t, first, again, "another project's row does not move this project's mark")
+
+	require.NoError(t, s.RecordReviewFindings(ctx, []ReviewFinding{
+		{Project: "p", Key: "SC-1", PR: 7, Round: 2, File: "a.go", Slug: "third"},
+	}))
+	moved, err := s.LatestFindingID(ctx, "p")
+	require.NoError(t, err)
+	assert.Greater(t, moved, first)
+}
