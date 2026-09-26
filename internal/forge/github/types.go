@@ -60,6 +60,11 @@ type checkRun struct {
 	Conclusion string `json:"conclusion"`
 	StartedAt  string `json:"started_at"`
 	DetailsURL string `json:"details_url"`
+	// App is the application that owns the run. GitHub nests it, and only the
+	// slug is stable enough to classify on ("github-actions", "cla-assistant").
+	App struct {
+		Slug string `json:"slug"`
+	} `json:"app"`
 }
 
 type checkRunsResponse struct {

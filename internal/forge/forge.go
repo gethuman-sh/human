@@ -135,10 +135,19 @@ type ChecksReader interface {
 // a consumer reads the same pending/passing/failing words the deploy gate uses.
 // DetailsURL points at the provider's page for the check (its log), the place a
 // recovery agent looks next; it is "" when the provider reports none.
+//
+// App is what REPORTED the check — the owning application's slug on providers
+// that name one (GitHub check runs: "github-actions", "cla-assistant"). It is ""
+// where the provider names none, which a legacy commit status does. It exists
+// because "a check went red" and "the branch's code is broken" were the same
+// fact in this model, so a signature bot's red was handed to a code fixer with
+// nothing to fix (SC-5843). A consumer that cannot attribute a check must treat
+// it as code-affecting: unknown is never a licence to ignore a red.
 type CheckResult struct {
 	Name       string      `json:"name"`
 	Conclusion ChecksState `json:"conclusion"`
 	DetailsURL string      `json:"detailsURL"`
+	App        string      `json:"app,omitempty"`
 }
 
 // PullRequestState is the read surface over a pull request that answers more

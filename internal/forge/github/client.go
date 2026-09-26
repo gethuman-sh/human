@@ -479,6 +479,9 @@ func (c *Client) ReadPullRequest(ctx context.Context, repoName string, number in
 // other: a context reported by both a check run and a legacy commit status
 // would appear twice. Rare on GitHub Actions repos (which use check runs, not
 // statuses), so not worth the extra bookkeeping today.
+//
+// A legacy commit status carries no owning app, so its App is "" — the
+// "cannot attribute this check" case a consumer must treat as code-affecting.
 func (c *Client) checkResults(ctx context.Context, owner, repo, repoName, sha string) ([]forge.CheckResult, error) {
 	runsPath := fmt.Sprintf("/repos/%s/%s/commits/%s/check-runs",
 		url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(sha))
@@ -507,6 +510,7 @@ func (c *Client) checkResults(ctx context.Context, owner, repo, repoName, sha st
 			Name:       run.Name,
 			Conclusion: runVerdict(run),
 			DetailsURL: run.DetailsURL,
+			App:        run.App.Slug,
 		})
 	}
 	for _, s := range combined.Statuses {
