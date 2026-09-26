@@ -1047,6 +1047,26 @@ func selectedEnv() map[string]string {
 	return env
 }
 
+// Feedback asks the daemon what a launch of one stage would be told (SC-6016).
+// A route rather than a forwarded command because the briefing is built by
+// the daemon's own record handle, model runner and launch cache, so a
+// forwarded cobra command could only rebuild a second, differing copy.
+func (c *Client) Feedback(req FeedbackRequest) (FeedbackReport, error) {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return FeedbackReport{}, errors.WrapWithDetails(err, "marshaling feedback request")
+	}
+	out, err := c.RunRemoteCapture([]string{"feedback", string(data)})
+	if err != nil {
+		return FeedbackReport{}, err
+	}
+	var resp FeedbackReport
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return FeedbackReport{}, errors.WrapWithDetails(err, "invalid feedback JSON")
+	}
+	return resp, nil
+}
+
 // FSMWhere asks the daemon where one ticket is in the pipeline. A route rather
 // than a forwarded command because the answer needs the daemon's own liveness
 // records and retry counters, which a forwarded cobra command has no handle to.

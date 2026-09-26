@@ -132,6 +132,10 @@ type Server struct {
 	// spent, for the same route. It must READ ONLY: StageRetry.Attempts
 	// increments, and a question must never spend the budget it asks about.
 	WhereAttempts func(pmKey string, stage BoardStage) (int, error)
+	// Feedback answers the feedback route: the briefing a launch of one stage
+	// would carry, for `human feedback`. nil disables it — the state of a
+	// daemon whose findings record could not be opened.
+	Feedback FeedbackExplainer
 	// AgentProgress is the daemon's single liveness probe: the hook stream
 	// folded with the proxy's outstanding-model-request state. Injected by the
 	// daemon wiring, which owns the in-flight counter and the IP registry. nil
@@ -589,6 +593,7 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"descedit-discard":   func() { s.withBlockingOp(func() { s.handleDescEditDiscard(conn, args[1:]) }) },
 		"bug-create":         func() { s.withBlockingOp(func() { s.handleBugCreate(conn, args[1:]) }) },
 		"fsm-where":          func() { s.handleFSMWhere(conn, args[1:]) },
+		"feedback":           func() { s.handleFeedback(conn, args[1:]) },
 		"security-create":    func() { s.withBlockingOp(func() { s.handleSecurityCreate(conn, args[1:]) }) },
 		"features-generate":  func() { s.withBlockingOp(func() { s.handleFeaturesGenerate(conn) }) },
 		"findbugs-start":     func() { s.withBlockingOp(func() { s.handleFindbugsStart(conn) }) },

@@ -525,6 +525,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		BoardOptioner:          boardOptionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, ipWiring, egressBlocked, advice),
 		BugCreator:             bugCreatorFunc(projectRegistry, vaultResolver, relateLauncherFunc(projectRegistry, daemonID, ipWiring)),
 		WhereComments:          whereCommentsFunc(projectRegistry, vaultResolver),
+		Feedback:               advice.explainerFor(projectRegistry, vaultResolver),
 		WhereAttempts: func(pmKey string, stage daemon.BoardStage) (int, error) {
 			// The READ-ONLY twin of the retry path's counter. bumpStageRetries
 			// increments as it reads, so wiring it here would spend a ticket's
