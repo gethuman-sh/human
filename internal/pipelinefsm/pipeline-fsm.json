@@ -1117,7 +1117,7 @@
       "marker": "[human:deploy-failed]",
       "where": "internal/daemon/board_egressblock.go postEgressBlockedFailure, reached from board_transition.go AdvanceDeployFix → deployFixUnreachable (the deploy-fix step, whose exit driveDeployFixExit claims before the generic gate can see it) and board_reconcile.go reconcileOutage (a card already parked in substrate-down); board_retry.go classifyRelaunch returns relaunchNone for the same fact, so neither the live exit path nor reconcileFailedStages nor reconcileOneStuckCard re-drives it",
       "doc": "The one ending that SAYS outage and is not one, for the done stage — reached even before the generic outage gate, since driveDeployFixExit claims a deploy-fixer's exit first (deployFixUnreachable splits a policy-refused host off deployFixOutage). See egress-blocked-by-policy-implementation's doc for the full rationale (SC-5840): the daemon's own proxy block record reclassifies the stop into the stage's own *-failed marker, uncharged and said once, with no relaunch until a person edits proxy.domains and restarts the daemon.",
-      "prompt": "shared/exit-contract.md and human-deploy-fixer-agent.md — the `outage` row names the one case the daemon overrides"
+      "prompt": "shared/exit-contract.md, human-deploy-fixer-agent.md and human-deploy-fix-skill.md — the `outage` row names the one case the daemon overrides"
     },
     {
       "name": "launch-refused-no-plan",

@@ -244,6 +244,37 @@ func TestReconcileOutage_RealOutageStillRelaunchesUncharged(t *testing.T) {
 	assert.Equal(t, []BoardStage{BoardImplementation}, relaunched)
 }
 
+// TestReconcileOutage_BlockedWithNoPosterKeepsTheWait pins the pass's stated
+// rule for an unwired PostFailed: it disables the handover only, leaving the
+// indefinite uncharged wait rather than stranding the card with neither a
+// statement about the blocked host nor a re-drive (SC-5840).
+func TestReconcileOutage_BlockedWithNoPosterKeepsTheWait(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	cards := []ReconcileCard{{
+		Key: "SC-1",
+		Comments: []tracker.Comment{
+			cmt(ImplementationStartedHeader, now.Add(-time.Hour)),
+			cmt(ImplementationOutageHeader+"\nop timed out", now.Add(-time.Minute)),
+		},
+	}}
+	var relaunched []BoardStage
+	retry := StageRetry{
+		Max:      2,
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return ExitOutage, true },
+		Attempts: func(string, BoardStage) (int, error) { return 0, nil },
+		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
+		EgressBlocked: func(string) (EgressBlock, bool) {
+			return EgressBlock{Host: "github.com", At: now.Add(-time.Minute)}, true
+		},
+	}
+
+	redriven, handedOver := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), Retry: retry, DaemonID: "d1"}, now)
+
+	assert.Equal(t, 1, redriven, "with no poster the card keeps its uncharged wait")
+	assert.Equal(t, 0, handedOver)
+	assert.Equal(t, []BoardStage{BoardImplementation}, relaunched)
+}
+
 func TestReconcileOutage_PastTheWaitBoundStillTakesTheHandover(t *testing.T) {
 	now := time.Unix(10_000, 0)
 	cards := []ReconcileCard{{

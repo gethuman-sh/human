@@ -674,17 +674,8 @@ func reconcileOutage(ctx context.Context, drivable DrivableCards, deps Reconcile
 			}
 			continue
 		}
-		// A host this daemon's own proxy refused is not a substrate to wait for:
-		// it comes back only when a person edits proxy.domains, so the uncharged
-		// re-drive would repeat a config gap at the reconcile interval for six
-		// hours — which is exactly what it did (SC-5840). Converting the card to
-		// a red here is what reaches a card parked before this daemon learned the
-		// difference. Counted as a handover because that is what it is: the wait
-		// is ended and a person is told, charging nothing.
-		if blk, ok := deps.Retry.egressBlock(card.Key); ok {
-			if postEgressBlockedFailure(ctx, card.Key, derived.Stage, card.Comments, blk, deps.PostFailed, logger) {
-				handedOver++
-			}
+		if over, handled := egressBlockedHandover(ctx, card, derived, deps, logger); handled {
+			handedOver += over
 			continue
 		}
 		// The card already derived to BoardOutage from its standing *-outage
@@ -703,6 +694,37 @@ func reconcileOutage(ctx context.Context, drivable DrivableCards, deps Reconcile
 		}
 	}
 	return redriven, handedOver
+}
+
+// egressBlockedHandover ends the wait for a card whose host this daemon's own
+// proxy refused by policy: the "substrate" there is a line missing from a config
+// file on this host, so the uncharged re-drive would repeat the same gap every
+// reconcile tick for six hours — which is exactly what it did (SC-5840).
+// Converting the card is also what reaches one parked before this daemon learned
+// the difference.
+//
+// It reports how many cards were handed to a person and whether the card is
+// handled at all; a handled card is never re-driven, which is the "no relaunch
+// until the config changes" half of the fix. Counted as a handover because that
+// is what it is: the wait is ended and a person is told, charging nothing. An
+// unwired PostFailed keeps the indefinite wait rather than stranding the card
+// with neither a statement nor a re-drive, which is the same rule the wait-bound
+// handover follows.
+func egressBlockedHandover(ctx context.Context, card ReconcileCard, derived BoardCard, deps ReconcileDeps, logger zerolog.Logger) (handedOver int, handled bool) {
+	if deps.PostFailed == nil {
+		return 0, false
+	}
+	blk, ok := deps.Retry.egressBlock(card.Key)
+	if !ok {
+		return 0, false
+	}
+	if !postEgressBlockedFailure(ctx, card.Key, derived.Stage, card.Comments, blk, deps.PostFailed, logger) {
+		// The post itself failed (logged there). The card keeps its standing
+		// outage marker and this pass tries again next tick: re-driving instead
+		// would repeat a gap no re-drive can close.
+		return 0, true
+	}
+	return 1, true
 }
 
 // parseResume parses a derived card's ResumeAt (an RFC3339 instant a paused
