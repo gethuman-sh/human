@@ -426,3 +426,25 @@ func TestFeedbackExplain_reportsAFailedModelCall(t *testing.T) {
 	assert.Equal(t, 1, rep.Rows, "what was gathered is still reported alongside the error")
 	assert.Contains(t, herrors.CauseChain(err), "model unreachable")
 }
+
+// The model does not always stop at the shape the prompt asks for (SC-6039):
+// a sentinel followed by an explanation is still none, prose around the
+// dashed lines is not advice, and the stated line bound holds even when the
+// model does not count.
+func TestCleanFeedback_keepsOnlyTheAdviceLines(t *testing.T) {
+	cases := map[string]struct{ answer, want string }{
+		"sentinel alone":            {"NONE", ""},
+		"sentinel with a period":    {"none.", ""},
+		"sentinel then commentary":  {"NONE\n\nSC-1 is merged, so nothing here applies.", ""},
+		"preamble and closing":      {"Looking at the record, here is what matters:\n\n- a.go [tests]: cover the error path\n- b.go [docs]: update the ledger\n\nThat covers it.", "- a.go [tests]: cover the error path\n- b.go [docs]: update the ledger"},
+		"fenced":                    {"```\n- a.go [tests]: cover the error path\n```", "- a.go [tests]: cover the error path"},
+		"indented lines":            {"  - a.go: one\n  - b.go: two", "- a.go: one\n- b.go: two"},
+		"prose only":                {"There is nothing of note in this record.", ""},
+		"more lines than the bound": {strings.Repeat("- x\n", feedbackMaxLines+3), strings.TrimSuffix(strings.Repeat("- x\n", feedbackMaxLines), "\n")},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tc.want, cleanFeedback(tc.answer))
+		})
+	}
+}
