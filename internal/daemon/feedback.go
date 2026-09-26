@@ -114,10 +114,18 @@ type FeedbackCache struct {
 	blocks map[feedbackKey]string
 }
 
+// feedbackKey identifies one launch's cached block. branch is part of the
+// identity, not an afterthought: the pull-request stages scope by the
+// branch's diff (feedback_scope.go's branchFiles), so a block built for one
+// branch is not the block a launch on a different branch — or no branch at
+// all — would be given. Without it, `human feedback` asked with a differing
+// or absent --branch would write into the exact cache slot the next real
+// launch reads and serve it a briefing scoped to the wrong diff (SC-6016).
 type feedbackKey struct {
 	project string
 	key     string
 	stage   BoardStage
+	branch  string
 	id      int64
 }
 
@@ -138,7 +146,7 @@ func (f *FeedbackDeps) Advice(ctx context.Context, key string, stage BoardStage,
 	if latest == 0 {
 		return ""
 	}
-	ck := feedbackKey{project: f.Project, key: key, stage: stage, id: latest}
+	ck := feedbackKey{project: f.Project, key: key, stage: stage, branch: branch, id: latest}
 	if block, ok := f.Cache.get(ck); ok {
 		return block
 	}
@@ -222,7 +230,7 @@ func (f *FeedbackDeps) Explain(ctx context.Context, key string, stage BoardStage
 	if rep.Rows == 0 {
 		return rep, nil
 	}
-	ck := feedbackKey{project: f.Project, key: key, stage: stage, id: latest}
+	ck := feedbackKey{project: f.Project, key: key, stage: stage, branch: branch, id: latest}
 	if block, ok := f.Cache.get(ck); ok {
 		rep.Block, rep.Cached = block, true
 		return rep, nil

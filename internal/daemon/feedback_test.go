@@ -373,6 +373,29 @@ func TestFeedbackExplain_mirrorsTheLaunchAndReadsItsCache(t *testing.T) {
 	assert.Equal(t, rep.Block, fresh.Block)
 }
 
+// A read-only ask must never decide what a later launch is told. An ask
+// with a differing (or absent) branch writes into its own cache slot, so the
+// launch that follows — which always passes the branch off its own dispatch
+// line — still makes its own call rather than being served the ask's block
+// (SC-6016).
+func TestFeedbackExplain_withDifferingBranchLeavesTheLaunchsOwnCallIntact(t *testing.T) {
+	store := newFeedbackStore(t)
+	seedFinding(t, store, "p", "SC-9", "internal/x/y.go", "contract", "the wire field was added without a bump")
+	runner := &countingRunner{answer: "- internal/x/y.go [contract]: bump the protocol"}
+	f := &FeedbackDeps{Record: store, Runner: runner, Project: "p", Cache: &FeedbackCache{}}
+
+	// A person asking `human feedback SC-1 prfix` without --branch.
+	_, err := f.Explain(context.Background(), "SC-1", prFixAgentStage, "")
+	require.NoError(t, err)
+	assert.Len(t, runner.prompts, 1)
+
+	// The real launch, which always carries the branch off the dispatch
+	// line, must still pay for its own model call.
+	launched := f.Advice(context.Background(), "SC-1", prFixAgentStage, "autofix/sc-1")
+	assert.Len(t, runner.prompts, 2, "the branch-less ask must not have poisoned the launch's cache slot")
+	assert.Equal(t, runner.answer, launched)
+}
+
 func TestFeedbackExplain_emptyRecordIsAnAnswerAndDisabledIsAnError(t *testing.T) {
 	runner := &countingRunner{answer: "- something"}
 	f := &FeedbackDeps{Record: newFeedbackStore(t), Runner: runner, Project: "p"}
