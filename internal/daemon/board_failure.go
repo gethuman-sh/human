@@ -809,9 +809,19 @@ func drivePRLoopExit(exit RunExit, deps FailureDeps) bool {
 // at AdvanceDeployFix (PublishResolvedBranch), so waiving the protection on an
 // error the run then recovers from is how that resolution would be lost.
 //
-// A fixer that genuinely dies on a substrate failure is not stranded: the loop's
-// durable re-drive owns it (reconcilePRLoops asks board-<key>-deployfix too,
-// SC-5591), and waiting for that is right in both cases.
+// A fixer that genuinely dies here is not silently lost, but it is not a free
+// retry either: reconcilePRLoops re-drives only a card whose newest done-stage
+// marker is pr-review-started or pr-fix-started (doneStageLoopActive ->
+// doneStageLoopHalf, board_reconcile.go:392-411, gated at :601) — once
+// deploy-fix-started is the newest marker no reconcile pass calls
+// AdvanceDeployFix (its only call sites are :831 below and
+// cmd/cmddaemon/daemon.go's live exit path). SC-5591's three-name join
+// (liveStageAgent) is a stand-down guard against double-dispatch, not an
+// ownership claim over deploy-fix cards; the FSM doc's deploy-fixing.note says
+// the same. The actual recovery is reconcileStuckRunning: after
+// StuckRunningGrace it posts [human:deploy-failed] and charges the stage's
+// retry budget (stuckCardIsOursToRed/stuckCardLivenessVerdict) — a delayed,
+// CHARGED red, not an uncharged re-drive.
 func driveDeployFixExit(exit RunExit, deps FailureDeps) bool {
 	if exit.Stage != deployFixAgentStage {
 		return false
