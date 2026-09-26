@@ -300,6 +300,13 @@ type BoardTransitionDeps struct {
 	// leaves the work for a healthy daemon, and the failure surfaces only on this
 	// host (doctor / rail LED), never as a ticket marker (SC-912). nil disables.
 	LaunchGate func(ctx context.Context) []DoctorCheck
+	// Feedback returns the advice block a launch carries — what past machine
+	// reviews found in this project, distilled for this ticket and stage — or
+	// "" when there is none (SC-5959). It is appended after the dispatch line
+	// at the one chokepoint every stage launch funnels through, so no stage can
+	// forget to consult the record. nil disables; a nil-disabled launch prompt
+	// is byte-identical to one built before the field existed.
+	Feedback func(ctx context.Context, pmKey string, stage BoardStage, branch string) string
 	// BlockedBy reports the still-open issues pmKey must wait for. It resolves
 	// each blocker's real status, so a finished blocker is simply absent from
 	// the result — the gate never has to guess what "open" means. nil disables
@@ -860,6 +867,7 @@ func (d BoardTransitionDeps) launchAgent(ctx context.Context, pmKey, name, promp
 	// late to recognise it.
 	_, stage, _ := parseAgentName(name)
 	runID := d.Runs.Register(name, pmKey, stage)
+	prompt = withFeedback(prompt, d.launchAdvice(ctx, pmKey, stage, prompt))
 	if err := d.Launcher.Launch(ctx, name, prompt, d.WorkspaceDir, d.ConfigDir, runID); err != nil {
 		// Nothing will ever arrive for a run that did not start, and a single-flight
 		// refusal means another launch owns the work — either way the id is dead.

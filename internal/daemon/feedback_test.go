@@ -81,7 +81,7 @@ func TestFeedbackAdvice_cacheHoldsUntilTheRecordGrows(t *testing.T) {
 	store := newFeedbackStore(t)
 	seedFinding(t, store, "", "SC-9", "a.go", "tests", "untested")
 	runner := &countingRunner{answer: "- a.go [tests]: add the test"}
-	f := &FeedbackDeps{Record: store, Runner: runner}
+	f := &FeedbackDeps{Record: store, Runner: runner, Cache: &FeedbackCache{}}
 
 	first := f.Advice(context.Background(), "SC-1", BoardImplementation, "")
 	second := f.Advice(context.Background(), "SC-1", BoardImplementation, "")
@@ -220,4 +220,43 @@ func TestGitChangedFiles_listsTheBranchAgainstTheRemoteDefault(t *testing.T) {
 
 	_, err = gitChangedFiles(ctx, ws, "no-such-branch")
 	assert.Error(t, err)
+}
+
+func TestLaunchAgent_appendsTheAdviceAfterTheDispatchLine(t *testing.T) {
+	c := &fakeCommenter{}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	var asked []string
+	deps.Feedback = func(_ context.Context, pmKey string, stage BoardStage, branch string) string {
+		asked = append(asked, pmKey+" "+string(stage)+" "+branch)
+		return "- a.go [tests]: add the test"
+	}
+
+	launched, err := deps.launchAgent(context.Background(), "SC-1", agentNameFor("SC-1", prFixAgentStage), prFixDispatch("SC-1", 7, "autofix/sc-1"))
+	require.NoError(t, err)
+	assert.True(t, launched)
+	assert.Equal(t, []string{"SC-1 prfix autofix/sc-1"}, asked, "the branch comes off the dispatch line")
+	lines := strings.Split(l.prompt, "\n")
+	assert.Equal(t, prFixDispatch("SC-1", 7, "autofix/sc-1"), lines[0], "skills parse their arguments off an unchanged first line")
+	assert.Contains(t, l.prompt, FeedbackHeading+"\n\n- a.go [tests]: add the test")
+}
+
+func TestLaunchAgent_noAdviceLeavesThePromptUntouched(t *testing.T) {
+	c := &fakeCommenter{}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	_, err := deps.launchAgent(context.Background(), "SC-1", agentNameFor("SC-1", BoardImplementation), "/human-execute SC-1")
+	require.NoError(t, err)
+	assert.Equal(t, "/human-execute SC-1", l.prompt, "nil Feedback: byte-identical")
+
+	deps.Feedback = func(context.Context, string, BoardStage, string) string { return "" }
+	_, err = deps.launchAgent(context.Background(), "SC-1", agentNameFor("SC-1", BoardImplementation), "/human-execute SC-1")
+	require.NoError(t, err)
+	assert.Equal(t, "/human-execute SC-1", l.prompt, "an empty block: byte-identical")
+}
+
+func TestDispatchBranch(t *testing.T) {
+	assert.Equal(t, "feat/x", dispatchBranch("/human-pr-review SC-1 --pr=3 --branch=feat/x\n\nmore"))
+	assert.Equal(t, "", dispatchBranch("/human-execute SC-1"))
+	assert.Equal(t, "", dispatchBranch("/human-execute SC-1\n--branch=not-on-the-dispatch-line"))
 }

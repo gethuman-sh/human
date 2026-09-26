@@ -26,7 +26,9 @@ type FeedbackRunner interface {
 type FeedbackRunnerFunc func(ctx context.Context, prompt string) (string, error)
 
 // Run implements FeedbackRunner.
-func (f FeedbackRunnerFunc) Run(ctx context.Context, prompt string) (string, error) { return f(ctx, prompt) }
+func (f FeedbackRunnerFunc) Run(ctx context.Context, prompt string) (string, error) {
+	return f(ctx, prompt)
+}
 
 // FeedbackRecord is the slice of the review record the advice is built from.
 // It is its own interface rather than recall.FindingsReader widened, so the
@@ -94,18 +96,28 @@ type FeedbackDeps struct {
 	// uses git in Workspace (gitChangedFiles). Injected so the scope is
 	// testable without a repository.
 	ChangedFiles func(ctx context.Context, workspace, branch string) ([]string, error)
-	Timeout      time.Duration
-	Now          func() time.Time
-	Logger       zerolog.Logger
+	// Cache spares a relaunch the second model call. It is shared across the
+	// per-request FeedbackDeps a daemon builds for one project, so it lives
+	// outside them; nil caches nothing, which is what a test wants.
+	Cache   *FeedbackCache
+	Timeout time.Duration
+	Now     func() time.Time
+	Logger  zerolog.Logger
+}
 
-	mu    sync.Mutex
-	cache map[feedbackKey]string
+// FeedbackCache holds rendered blocks keyed on the launch and the record's
+// high-water mark, so a relaunch with no new finding pays nothing and a new
+// row is a new briefing.
+type FeedbackCache struct {
+	mu     sync.Mutex
+	blocks map[feedbackKey]string
 }
 
 type feedbackKey struct {
-	key   string
-	stage BoardStage
-	id    int64
+	project string
+	key     string
+	stage   BoardStage
+	id      int64
 }
 
 // Advice returns the block for one launch, or "" when there is none: no
@@ -125,29 +137,35 @@ func (f *FeedbackDeps) Advice(ctx context.Context, key string, stage BoardStage,
 	if latest == 0 {
 		return ""
 	}
-	ck := feedbackKey{key: key, stage: stage, id: latest}
-	if block, ok := f.cached(ck); ok {
+	ck := feedbackKey{project: f.Project, key: key, stage: stage, id: latest}
+	if block, ok := f.Cache.get(ck); ok {
 		return block
 	}
 	block := f.build(ctx, key, stage, branch)
-	f.remember(ck, block)
+	f.Cache.put(ck, block)
 	return block
 }
 
-func (f *FeedbackDeps) cached(k feedbackKey) (string, bool) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	block, ok := f.cache[k]
+func (c *FeedbackCache) get(k feedbackKey) (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	block, ok := c.blocks[k]
 	return block, ok
 }
 
-func (f *FeedbackDeps) remember(k feedbackKey, block string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.cache == nil || len(f.cache) >= feedbackCacheEntries {
-		f.cache = map[feedbackKey]string{}
+func (c *FeedbackCache) put(k feedbackKey, block string) {
+	if c == nil {
+		return
 	}
-	f.cache[k] = block
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.blocks == nil || len(c.blocks) >= feedbackCacheEntries {
+		c.blocks = map[feedbackKey]string{}
+	}
+	c.blocks[k] = block
 }
 
 // build reads the record for one launch and asks the model once.
@@ -350,4 +368,27 @@ func withFeedback(prompt, block string) string {
 		return prompt
 	}
 	return strings.TrimRight(prompt, "\n") + "\n\n" + FeedbackHeading + "\n\n" + block + "\n"
+}
+
+// launchAdvice asks the wired Feedback for this launch's block. The branch,
+// which only the pull-request stages have, is read back off the dispatch line
+// this package itself composed (prReviewDispatch and its siblings), so the
+// three launch routes need no extra parameter to carry it.
+func (d BoardTransitionDeps) launchAdvice(ctx context.Context, pmKey string, stage BoardStage, prompt string) string {
+	if d.Feedback == nil {
+		return ""
+	}
+	return d.Feedback(ctx, pmKey, stage, dispatchBranch(prompt))
+}
+
+// dispatchBranch returns the `--branch=` value on a prompt's dispatch line,
+// "" when the line carries none.
+func dispatchBranch(prompt string) string {
+	line, _, _ := strings.Cut(prompt, "\n")
+	for _, field := range strings.Fields(line) {
+		if v, ok := strings.CutPrefix(field, "--branch="); ok {
+			return v
+		}
+	}
+	return ""
 }
