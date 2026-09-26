@@ -2276,10 +2276,11 @@ func (d BoardTransitionDeps) egressBlock(pmKey string) (EgressBlock, bool) {
 // summary is the step's own line, so the card names what was unreachable instead
 // of the generic fallback.
 //
-// Reached for the deploy fixer only for an outage this host cannot explain; a
-// policy-refused host is split off by deployFixUnreachable first.
+// Reached for the PR reviewer, the PR fixer and the deploy fixer alike, for an
+// outage this host cannot explain; a deploy fixer's policy-refused host is split
+// off by deployFixUnreachable first.
 func (d BoardTransitionDeps) doneStageOutage(ctx context.Context, pmKey string, comments []tracker.Comment, summary string) error {
-	// The fixer's summary is agent-authored free text and the template's "one
+	// The agent's summary is agent-authored free text and the template's "one
 	// line" is not enforced: collapsed to a single line (not just the first)
 	// so a multi-line summary neither duplicates itself into the composed
 	// sentence nor lets a "resume:" line ride along and get scanned by
@@ -2288,7 +2289,7 @@ func (d BoardTransitionDeps) doneStageOutage(ctx context.Context, pmKey string, 
 	body := markerBody(pausedOutageMarker(outageTypeFor(BoardDoneStage), nil, "", "", reason))
 	if outageAlreadyStated(comments, BoardDoneStage, body) {
 		d.Logger.Info().Str("pm", pmKey).
-			Msg("board deploy fix: the card already says the substrate is down, not repeating it")
+			Msg("board done stage: the card already says the substrate is down, not repeating it")
 		return nil
 	}
 	if _, err := d.Commenter.AddComment(ctx, pmKey, body); err != nil {

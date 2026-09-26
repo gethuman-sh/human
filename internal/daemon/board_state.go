@@ -150,7 +150,7 @@ type BoardCard struct {
 	// The two loop halves alternate their badge word, so a card at round one and
 	// a card at round seven read identically: alternating labels can show motion,
 	// only the round can show the motion is circular. The number is not new —
-	// prReviewRounds is the counter the loop's own outer bound reads — it has
+	// chargedPRReviewRounds is the counter the loop's own outer bound reads — it has
 	// simply never left the daemon.
 	PRReviewRound    int `json:"pr_review_round,omitempty"`
 	PRReviewRoundCap int `json:"pr_review_round_cap,omitempty"`

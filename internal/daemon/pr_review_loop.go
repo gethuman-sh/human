@@ -434,8 +434,8 @@ func PRReviewRounds(comments []tracker.Comment) int { return prReviewRounds(comm
 func PRLoopNumber(comments []tracker.Comment) int { return prLoopNumber(comments) }
 
 // prReviewRounds counts review rounds STARTED — one per pr-review-started
-// marker. It is the round's identity (the badge's number and the findings
-// record's round column), not the budget's: what the decider bounds against
+// marker. It is the round's identity (the findings
+// record's round column), not the budget's: what the decider and the badge bound against
 // DefaultPRReviewRounds is chargedPRReviewRounds, which gives back a round an
 // outage interrupted.
 func prReviewRounds(comments []tracker.Comment) int {
