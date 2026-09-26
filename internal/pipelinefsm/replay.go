@@ -37,6 +37,19 @@ type Replay struct {
 	// move was made.
 	Ambiguous []Disagreement
 
+	// States is every state the whole history is consistent with — the branches
+	// of an ambiguity carried forward instead of thrown away. State is one member
+	// of it, chosen alphabetically; a write GATE has to ask the set, because
+	// committing an ambiguous history to one branch refuses the moves only the
+	// other branch allows (SC-5839).
+	States []string
+
+	// Unaccounted is Refused judged against every branch: a marker no state
+	// consistent with the history has any move for. A write gate reads this and
+	// not Refused — a marker one branch refuses while another allows it is not
+	// evidence the ticket left the machine (SC-5839).
+	Unaccounted []Disagreement
+
 	Terminal bool
 }
 
@@ -80,10 +93,17 @@ func (r Replay) FirstRefusal() (Disagreement, bool) {
 func (d Document) Replay(markers []string) Replay {
 	idx := d.newReplayIndex()
 	state := d.Initial
+	possible := []string{d.Initial}
 	out := Replay{}
 
 	for _, raw := range markers {
 		m := normalizeMarker(raw)
+		advanced, accounted := idx.advanceAll(possible, m)
+		if !accounted {
+			out.Unaccounted = append(out.Unaccounted, Disagreement{Marker: m, State: possible[0], Options: possible})
+		}
+		possible = advanced
+
 		dsts := idx.destinations(state, m)
 		switch {
 		case len(dsts) == 1:
@@ -103,9 +123,38 @@ func (d Document) Replay(markers []string) Replay {
 	}
 
 	out.State = state
+	out.States = possible
 	out.Blur = idx.closure(state)
 	out.Terminal = idx.terminal[state]
 	return out
+}
+
+// advanceAll carries every state the history could be in through one marker,
+// keeping every branch of an ambiguity rather than committing to one of them.
+// A branch that cannot account for the marker is dropped, because it is not a
+// reading of the history the marker is consistent with; when NO branch can, the
+// item left the machine here and every branch is kept so the rest still replays.
+// The bool is false exactly then.
+func (idx *replayIndex) advanceAll(from []string, marker string) ([]string, bool) {
+	next := map[string]bool{}
+	accounted := false
+	for _, s := range from {
+		dsts := idx.destinations(s, marker)
+		switch {
+		case len(dsts) > 0:
+			accounted = true
+			for _, d := range dsts {
+				next[d] = true
+			}
+		case idx.unclassified[marker]:
+			accounted = true
+			next[s] = true
+		}
+	}
+	if !accounted {
+		return from, false
+	}
+	return sortedKeys(next), true
 }
 
 // replayIndex is the document arranged for the question replay asks of it.
@@ -251,6 +300,37 @@ func sortedKeys(m map[string]bool) []string {
 // than only a description.
 func (d Document) Accepts(state, marker string) bool {
 	return len(d.newReplayIndex().destinations(state, normalizeMarker(marker))) > 0
+}
+
+// Admits reports whether marker may be posted on a ticket whose history replayed
+// to r — the question a write gate must ask instead of Accepts(r.State, marker).
+// An ambiguous history has no single state, and judging the marker against the
+// one branch replay happened to pick refuses a move the pipeline legitimately
+// made from the other (SC-5839).
+func (d Document) Admits(r Replay, marker string) bool {
+	if r.DestinationUnknown() {
+		return true
+	}
+	for _, s := range r.States {
+		if d.Accepts(s, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// Reachable expands a set of states into everything reachable from them without
+// leaving a trace on the ticket — the search space a reader has to consider when
+// naming where an item might be, or what it might post next.
+func (d Document) Reachable(states []string) []string {
+	idx := d.newReplayIndex()
+	seen := map[string]bool{}
+	for _, s := range states {
+		for _, r := range idx.closure(s) {
+			seen[r] = true
+		}
+	}
+	return sortedKeys(seen)
 }
 
 // Trace is one ticket's marker history, oldest first — the unit of the corpus.
