@@ -1520,13 +1520,16 @@ func roundsNetOfOutage(comments []tracker.Comment, startedHeader string) int {
 // fixer disagreeing.
 //
 // Chronological with a pending flag, the same walk as roundsNetOfOutage:
-// entering a fix dispatch arms the flag, a review-started marker (recorded
-// after a real fix report) disarms it, and the flag is read off at exactly the
-// newest review-started marker, so a stray earlier outage — including one that
-// interrupted the REVIEWER's own run rather than the fixer's — never taints a
-// later, genuine round. An outage during review is not this case: the fix
+// entering a fix dispatch arms the flag, the NEXT fix dispatch disarms it, and
+// the flag is read off at exactly the newest review-started marker. Only a fix
+// dispatch may disarm it: the outage re-drive can itself be outaged (the
+// reviewer it relaunched never ran either) and posts one more
+// pr-review-started on the next tick, and that reviewer still faces the finding
+// no fixer has addressed. Disarming on review-started read that second re-drive
+// as a genuine round and redded the card one outage deeper than the case this
+// helper exists for. An outage during review is not this case: the fix
 // dispatch it followed already completed, so the finding it compares against
-// is real.
+// is real, and the flag was never armed.
 func reviewFollowsOutagedFix(comments []tracker.Comment) bool {
 	sorted := make([]tracker.Comment, len(comments))
 	copy(sorted, comments)
@@ -1540,7 +1543,7 @@ func reviewFollowsOutagedFix(comments []tracker.Comment) bool {
 			inFix, outagedFix = true, false
 		case strings.HasPrefix(trimmed, PRReviewStartedHeader):
 			result = outagedFix
-			inFix, outagedFix = false, false
+			inFix = false
 		case strings.HasPrefix(trimmed, DeployOutageHeader):
 			if inFix {
 				outagedFix = true

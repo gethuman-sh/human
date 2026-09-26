@@ -269,6 +269,17 @@ func TestReviewFollowsOutagedFix_TrueOnlyRightAfterAFixOutage(t *testing.T) {
 		}
 		assert.False(t, reviewFollowsOutagedFix(comments))
 	})
+	t.Run("the re-drive itself outaged — still no fixer has run", func(t *testing.T) {
+		comments := []tracker.Comment{
+			cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), base),
+			cmt(prFixStartedBody("a.go — x", "a.go — correctness"), base.Add(time.Second)),
+			cmt(DeployOutageHeader, base.Add(2*time.Second)),
+			cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), base.Add(3*time.Second)),
+			cmt(DeployOutageHeader, base.Add(4*time.Second)),
+			cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), base.Add(5*time.Second)),
+		}
+		assert.True(t, reviewFollowsOutagedFix(comments), "two outages deep, the finding is still the one the fixer never got")
+	})
 	t.Run("a stale earlier fix outage does not taint a later genuine round", func(t *testing.T) {
 		comments := []tracker.Comment{
 			cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), base),
