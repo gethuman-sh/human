@@ -249,11 +249,19 @@ func buildDevcontainerConfig(proxy, intercept bool, stacks []StackType, caPresen
 // bootstrapFor assembles the container's postStartCommand chain, plus the
 // capabilities and mounts that only the intercepting variant needs.
 //
-// The toolchain check goes LAST, deliberately. Earlier in the chain a Go
-// version mismatch would short-circuit the proxy redirect and CA trust, and the
-// container would then present as a certificate failure at the model API —
-// an infrastructure fault misattributed, which is what SC-4819 fixed. Last, it
-// costs nothing and is the final line of the container's start output.
+// The toolchain check runs right after chrome-bridge — after the proxy
+// redirect and CA trust, before any LSP install link. Earlier than the proxy
+// setup, a Go version mismatch would short-circuit CA trust and the container
+// would present as a certificate failure at the model API instead — an
+// infrastructure fault misattributed, which is what SC-4819 fixed. Later than
+// the LSP installs (where it lived before SC-5879's review) is worse, not
+// safer: `lspInstallCmd` for a Go stack IS `go install …@latest`, so the very
+// fault the check exists to report breaks that link first under `&&` and the
+// check never runs — the container's start output then shows the LSP
+// install's cryptic failure instead of the named-both-versions message. `&&`
+// is kept (not `;`) so a genuine LSP-install failure still raises
+// `reportHookFailure`'s WARNING rather than being masked by a check that
+// happens to pass.
 func bootstrapFor(proxy, intercept, caPresent bool, stacks []StackType, remoteEnv map[string]string) (capAdd, mounts []string, postStart string) {
 	switch {
 	case proxy && intercept:
@@ -278,11 +286,11 @@ func bootstrapFor(proxy, intercept, caPresent bool, stacks []StackType, remoteEn
 	default:
 		postStart = "human install --agent claude && human chrome-bridge"
 	}
-	if lsp := lspInstallCmd(stacks); lsp != "" {
-		postStart += " && " + lsp
-	}
 	if hasGoStack(stacks) {
 		postStart += " && " + toolchainCheckCmd
+	}
+	if lsp := lspInstallCmd(stacks); lsp != "" {
+		postStart += " && " + lsp
 	}
 	return capAdd, mounts, postStart
 }

@@ -139,9 +139,16 @@ resolved before a `go.mod` bump ships an older Go, every `go` invocation then
 fails at toolchain selection, and `GOTOOLCHAIN=local` refuses the module
 outright (SC-5879).
 
-The container's bootstrap ends with `human doctor toolchain`, which compares
-`go.mod` against the installed toolchain and fails naming both versions. Note
-that a failing `postStartCommand` is reported as a warning and does not abort the
+The container's bootstrap runs `human doctor toolchain` right after
+`human chrome-bridge` — after the proxy redirect and CA trust (so a mismatch
+never presents as a certificate failure), and before any LSP install link
+(`go install`, `npm install -g`, …). It compares `go.mod` against the
+installed toolchain and fails naming both versions. It runs before, not after,
+the LSP installs because a Go stack's own install link is `go install
+golang.org/x/tools/gopls@latest` — broken by the very mismatch the check
+exists to report — and the shell's `&&` chaining would otherwise let that
+earlier failure short-circuit the check before it ever runs. Note that a
+failing `postStartCommand` is reported as a warning and does not abort the
 container (`internal/devcontainer/hooks.go`), so the pin and the `make check`
 gate are what prevent the mismatch; the check is what says so if it happens
 anyway.

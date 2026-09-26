@@ -48,14 +48,67 @@ func TestDevcontainerPinsTheGoVersionGoModRequires(t *testing.T) {
 			"the image would ship a Go the project refuses (SC-5879)", required, pinned)
 }
 
+// postStartCommandText flattens postStartCommand to the text a shell would
+// see, whichever of the spec's shapes it takes — a bare string, or an object
+// of named commands (internal/devcontainer/document.go). A test that only
+// handles the string form breaks on a valid config the moment a named entry
+// (e.g. step_lsp.go's "human-lsp") is added, for a shape reason unrelated to
+// what it is gating (SC-5879 review).
+func postStartCommandText(t *testing.T, raw any) string {
+	t.Helper()
+	switch v := raw.(type) {
+	case string:
+		return v
+	case map[string]any:
+		var parts []string
+		for _, val := range v {
+			s, ok := val.(string)
+			require.Truef(t, ok, "named postStartCommand entry is not a string: %#v", val)
+			parts = append(parts, s)
+		}
+		return strings.Join(parts, " && ")
+	default:
+		t.Fatalf("postStartCommand has an unhandled shape: %#v", raw)
+		return ""
+	}
+}
+
 // TestDevcontainerChecksTheToolchainAtContainerStart: the pin above is a
 // declaration; this is what says so out loud in the container if the two ever
 // disagree again, at start rather than deep inside a run.
 func TestDevcontainerChecksTheToolchainAtContainerStart(t *testing.T) {
 	cfg, err := devcontainer.ReadConfig(".")
 	require.NoError(t, err)
-	cmd, ok := cfg.PostStartCommand.(string)
-	require.True(t, ok, "postStartCommand must be the string form this repo uses")
+	cmd := postStartCommandText(t, cfg.PostStartCommand)
 	require.Contains(t, cmd, "human doctor toolchain",
 		"the container bootstrap must check its Go against go.mod at start (SC-5879)")
+}
+
+// TestDevcontainerChecksTheToolchainBeforeLSPInstalls: the check must run
+// after "human chrome-bridge" (so a mismatch never presents as a certificate
+// failure at the model API, SC-4819) and BEFORE any `go install`/`npm
+// install -g` LSP link — those links can themselves fail from the very Go
+// version mismatch the check exists to report, and under the shell's `&&`
+// chaining a failed earlier link short-circuits everything after it,
+// including a check placed later (SC-5879 review: the check was unreachable
+// under its own condition — proof in the review, .human/reviews/sc-5879.md).
+func TestDevcontainerChecksTheToolchainBeforeLSPInstalls(t *testing.T) {
+	cfg, err := devcontainer.ReadConfig(".")
+	require.NoError(t, err)
+	cmd := postStartCommandText(t, cfg.PostStartCommand)
+
+	bridgeIdx := strings.Index(cmd, "human chrome-bridge")
+	checkIdx := strings.Index(cmd, "human doctor toolchain")
+	require.GreaterOrEqual(t, bridgeIdx, 0, "postStartCommand must run human chrome-bridge: %s", cmd)
+	require.GreaterOrEqual(t, checkIdx, 0, "postStartCommand must run human doctor toolchain: %s", cmd)
+	require.Less(t, bridgeIdx, checkIdx,
+		"the toolchain check must run after chrome-bridge, got: %s", cmd)
+
+	for _, lspCmd := range []string{"go install", "npm install -g"} {
+		if lspIdx := strings.Index(cmd, lspCmd); lspIdx >= 0 {
+			require.Lessf(t, checkIdx, lspIdx,
+				"the toolchain check must run before %q so an install failure caused by "+
+					"the toolchain mismatch cannot short-circuit the check under &&, got: %s", lspCmd, cmd)
+		}
+	}
 }

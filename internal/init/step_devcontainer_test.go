@@ -124,18 +124,33 @@ func TestBuildDevcontainerConfig_LeavesGoFeatureUnpinnedWithoutGoMod(t *testing.
 	}
 }
 
-// The toolchain check must be the LAST link in the chain: earlier, a Go
-// version mismatch would short-circuit the proxy redirect and CA trust and
-// present as a certificate failure at the model API instead (SC-4819's
-// anti-pattern, SC-5879).
-func TestBuildDevcontainerConfig_ChecksTheToolchainLast(t *testing.T) {
+// The toolchain check must run AFTER the proxy redirect and CA trust — earlier
+// and a Go version mismatch would short-circuit those and present as a
+// certificate failure at the model API instead (SC-4819's anti-pattern) — and
+// BEFORE any LSP install link. lspInstallCmd for a Go stack IS
+// `go install …@latest`, so under `&&` that link fails first from the very
+// fault the check exists to report, and the check placed after it never runs
+// (SC-5879, review finding: the check was unreachable under its own
+// condition).
+func TestBuildDevcontainerConfig_ChecksTheToolchainBeforeLSPInstalls(t *testing.T) {
 	cfg := buildDevcontainerConfig(true, true, []StackType{goStack(t)}, true, "1.26.6")
 	cmd := cfg.PostStartCommand
-	if !strings.HasSuffix(cmd, " && "+toolchainCheckCmd) {
-		t.Fatalf("postStartCommand must end with the toolchain check, got: %s", cmd)
+
+	proxyIdx := strings.Index(cmd, "human-proxy-setup")
+	bridgeIdx := strings.Index(cmd, "human chrome-bridge")
+	checkIdx := strings.Index(cmd, toolchainCheckCmd)
+	lspIdx := strings.Index(cmd, "go install")
+	if proxyIdx < 0 || bridgeIdx < 0 || checkIdx < 0 || lspIdx < 0 {
+		t.Fatalf("postStartCommand missing an expected link: %s", cmd)
 	}
-	if idx := strings.Index(cmd, "human-proxy-setup"); idx < 0 || idx > strings.Index(cmd, toolchainCheckCmd) {
-		t.Errorf("the proxy setup must precede the toolchain check, got: %s", cmd)
+	if proxyIdx >= bridgeIdx || bridgeIdx >= checkIdx || checkIdx >= lspIdx {
+		t.Errorf("want proxy-setup < chrome-bridge < toolchain check < lsp install, got: %s", cmd)
+	}
+	// The link before the check must still be joined with "&&", not ";": a
+	// failing chrome-bridge must still raise reportHookFailure's WARNING
+	// rather than being masked by a check that happens to pass anyway.
+	if !strings.Contains(cmd, "human chrome-bridge && "+toolchainCheckCmd) {
+		t.Errorf("the toolchain check must be && after chrome-bridge, got: %s", cmd)
 	}
 }
 
