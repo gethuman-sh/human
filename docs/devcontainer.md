@@ -75,6 +75,8 @@ proxy:
     - "github.com"
     - "api.openai.com"
     - "registry.npmjs.org"
+    - "proxy.golang.org"
+    - "sum.golang.org"
 ```
 
 | Mode | Behavior |
@@ -127,3 +129,28 @@ Enable the `proxy` option in the [treehouse](https://github.com/gethuman-sh/tree
 The generated config uses `host.docker.internal:19287` by default — Docker's built-in DNS name that resolves to the host machine. No manual env var export needed.
 
 The `proxy: true` option installs `iptables` and a setup script at image build time. At container start, `human-proxy-setup` reads `HUMAN_PROXY_ADDR` and redirects outbound HTTPS traffic to the proxy. If the variable is unset, the script skips gracefully.
+
+### Go toolchain
+
+The Go devcontainer feature is pinned to the version `go.mod` requires — the
+wizard writes the pin from `go.mod`, and `TestDevcontainerPinsTheGoVersionGoModRequires`
+fails `make check` if the two drift. Unpinned, the feature floats: an image
+resolved before a `go.mod` bump ships an older Go, every `go` invocation then
+fails at toolchain selection, and `GOTOOLCHAIN=local` refuses the module
+outright (SC-5879).
+
+The container's bootstrap ends with `human doctor toolchain`, which compares
+`go.mod` against the installed toolchain and fails naming both versions. Note
+that a failing `postStartCommand` is reported as a warning and does not abort the
+container (`internal/devcontainer/hooks.go`), so the pin and the `make check`
+gate are what prevent the mismatch; the check is what says so if it happens
+anyway.
+
+Go's automatic toolchain switch — the recovery when the image's Go is older than
+`go.mod` — downloads from `proxy.golang.org` and verifies against
+`sum.golang.org`. Both must be in the allowlist, and `human init` now writes them
+for any project with a Go stack. An **existing** project's allowlist lives in its
+own host-side `.humanconfig.yaml` and is not regenerated: add the two hosts under
+`proxy.domains` there and restart the daemon. Until then a blocked fetch reaches
+the ticket the same way any policy denial does — the daemon reds the card naming
+the host and the exact line to add (SC-5840).
