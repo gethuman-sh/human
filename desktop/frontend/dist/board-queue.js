@@ -126,6 +126,9 @@ export const RUNNING_LABELS = {
 export const DEPLOY_PHASE_LABELS = {
     "pr-review": "PR review…",
     "pr-fix": "fixing PR findings…",
+    // Kept for any reader that maps the phase generically; the dedicated badge
+    // branch below is what actually renders a queued deploy (SC-5878).
+    "deploy-queued": "deploy queued — waiting for this ticket's container…",
 };
 // The verb per chosen stage for a card a recorded decision has (re)queued but
 // whose fresh agent has not yet posted its started marker (SC-1320).
@@ -432,6 +435,19 @@ export function badgeInfo(card, nowMs = Date.now(), runningLabels = RUNNING_LABE
         const text = card.stopLinkedKey ? `${label.text} → ${card.stopLinkedKey}` : label.text;
         return { cls: "decided", text, title: label.title };
     }
+    // An accepted deploy held behind this ticket's own container. It is waiting, not
+    // working: no agent runs for it, so no liveness reading and no spinner — and the
+    // wait must outrank `activity`, because the phase records a card would otherwise
+    // show are being written by the very container it is waiting on (SC-5878).
+    if (card.stage === "done" && card.state === "running" && card.deployPhase === "deploy-queued") {
+        return {
+            cls: "await",
+            text: "deploy queued — waiting for this ticket's container",
+            title: "The deploy was accepted and is waiting for this ticket's own container to release the checkout. " +
+                "It starts by itself when that container ends; if it has not within 15 minutes the card comes back here and says so.",
+            spinner: false,
+        };
+    }
     if (card.state === "running") {
         const stageText = card.stage === "done" && card.deployPhase
             ? (DEPLOY_PHASE_LABELS[card.deployPhase] ?? "PR review…")
@@ -522,6 +538,16 @@ export function badgeInfo(card, nowMs = Date.now(), runningLabels = RUNNING_LABE
         // undetermined): a successful terminal outcome, never red, never deployable
         // (ticket 405).
         return { cls: "resolved", text: `no fix needed${phase}`, title: `Triage concluded no fix is warranted${phaseTitle}` };
+    }
+    // A queued deploy the machine gave up on: the card is back where the drop found
+    // it, nothing failed, and the only thing that separates it from a card nobody
+    // dropped is this reason (SC-5878).
+    if (card.deployQueueAbandoned) {
+        return {
+            cls: "warning",
+            text: `⚠ queued deploy gave up — ${card.deployQueueAbandoned}`,
+            title: "The deploy waited for this ticket's container and gave up without pushing anything. Nothing failed — drop it on Deploy again once that container has ended.",
+        };
     }
     if (card.stage === "verification" && card.state === "done" && verdictFailed(card)) {
         return reworkBadge(card);
