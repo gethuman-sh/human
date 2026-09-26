@@ -62,6 +62,14 @@ var dependentsFragment []byte
 //go:embed embed/shared/prior-findings.md
 var priorFindingsFragment []byte
 
+// The briefing the daemon appends to a launch prompt reaches the skill and
+// stops there: a subagent sees only the prompt the skill composes for it. One
+// fragment tells every dispatching skill to forward it, so the rule cannot be
+// phrased eight ways and drift on seven (SC-5959).
+//
+//go:embed embed/shared/launch-briefing.md
+var launchBriefingFragment []byte
+
 // The machine an agent runs inside was written down and invisible to it: no
 // prompt mentioned it, so every agent decided what to post, and whether it was
 // stuck, from its own prompt alone. This fragment is the half of `human fsm`
@@ -99,6 +107,7 @@ var sharedFragments = map[string][]byte{
 	"outcome-not-mechanism": outcomeNotMechanismFragment,
 	"dependents":            dependentsFragment,
 	"prior-findings":        priorFindingsFragment,
+	"launch-briefing":       launchBriefingFragment,
 	"fsm":                   fsmFragment,
 	"run-end":               runEndFragment,
 }

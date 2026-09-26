@@ -4,6 +4,8 @@ description: Fetch a dispatched ticket and review its handoff branch's changes a
 argument-hint: <dispatched-key> [--branch=…] [--commits=…]
 ---
 
+<!-- human:include launch-briefing -->
+
 `$ARGUMENTS` is `<DISPATCHED_KEY> [--branch=…] [--commits=…]`. The first token is the **dispatched key** — the ONE ticket this review is bound to. The optional `--branch=` and `--commits=` flags are the authoritative handoff binding the daemon derived: the exact branch and SHAs under review. Parse them out, then delegate to the **human-reviewer** agent, threading the binding through verbatim so the agent can verify the checked-out code IS this branch and these commits before reviewing:
 
 ```

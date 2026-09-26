@@ -4,6 +4,8 @@ description: Autonomously confirm, threat-model, root-cause, fix, security-revie
 argument-hint: <security-ticket-key>
 ---
 
+<!-- human:include launch-briefing -->
+
 # Overview
 
 Point this skill at a security ticket and it runs the full security-fix pipeline autonomously: **triage & threat-model → root-cause explanation on the ticket → verdict → (if a real vulnerability) plan → test-first fix on a branch → verify the exploit is closed → security review → (on a passing review) deploy: PR → CI gate → merge**. The whole trail is recorded on the tracker (comments + the plan — a separate engineering ticket in split topology, a `[human:plan]` comment on the security ticket itself otherwise), and every run that attempted a fix ends by posting a plain-language `[human:fix-summary]` comment on the ticket (Step 9).
