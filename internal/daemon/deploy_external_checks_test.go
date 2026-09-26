@@ -159,6 +159,80 @@ func TestWaitForChecks_ExternalByAppSlug(t *testing.T) {
 	assert.Contains(t, ciFailureHeadline(err), "license/agreement")
 }
 
+// SC-5843 r1 (blocking, board review): combineChecks reds the aggregate on the
+// FIRST failing check without waiting for the ones still pending, so a head
+// with build/test still running and only cla concluded reaches redHeadVerdict
+// as ChecksFailing before the code checks have answered. Past the grace this
+// must keep polling, not declare "no code change can turn green" on a build
+// that has not finished — the exact probe from PR #557's shape once build/test
+// are still in flight: {build: pending, test: pending, cla: failing}.
+func TestRedHeadVerdict_PendingCodeCheckIsNotYetConclusive(t *testing.T) {
+	p := &fakeDeployer{
+		prState: &forge.PullRequestState{Checks: []forge.CheckResult{
+			{Name: "build", Conclusion: forge.ChecksPending},
+			{Name: "test", Conclusion: forge.ChecksPending},
+			{Name: "cla", Conclusion: forge.ChecksFailing},
+		}},
+	}
+	deps := newDeps(&fakeCommenter{}, &fakeLauncher{}, p)
+	// graceElapsed=true models the probe exactly: five minutes have passed and
+	// the classifier is still asked for a verdict.
+	err := deps.redHeadVerdict(PRResult{Number: 557, URL: "https://example/pr/557"}, 300, "", true)
+	assert.NoError(t, err,
+		"a head with a still-pending code check must not be judged an external-only red just because the grace elapsed")
+}
+
+// End to end: waitForChecks must keep polling a head whose only concluded
+// failure is external while build/test are still pending, all the way to the
+// deploy's own bounded wait — never redding the card with the external-only
+// "re-run those checks" verdict while a possibly-broken build has not finished.
+func TestWaitForChecks_PendingCodeCheckOutlivesTheExternalGrace(t *testing.T) {
+	origInterval, origGrace := deployCheckInterval, deployExternalCheckGrace
+	deployCheckInterval, deployExternalCheckGrace = time.Millisecond, time.Millisecond
+	t.Cleanup(func() { deployCheckInterval, deployExternalCheckGrace = origInterval, origGrace })
+
+	p := &fakeDeployer{
+		checks: []forge.ChecksState{forge.ChecksFailing},
+		prState: &forge.PullRequestState{Checks: []forge.CheckResult{
+			{Name: "build", Conclusion: forge.ChecksPending},
+			{Name: "test", Conclusion: forge.ChecksPending},
+			{Name: "cla", Conclusion: forge.ChecksFailing},
+		}},
+	}
+	deps := newDeps(&fakeCommenter{}, &fakeLauncher{}, p)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	err := deps.waitForChecks(ctx, PRResult{Number: 557, URL: "https://example/pr/557"}, "")
+	require.Error(t, err)
+	assert.False(t, externalChecksRed(err),
+		"still-pending build/test must not be judged external-only just because the grace elapsed")
+	assert.Contains(t, err.Error(), "timed out waiting for CI checks",
+		"the head must still be waiting (bounded by the deploy's own timeout), not failed on the bot's answer alone")
+}
+
+// SC-5843 r1 (non-blocking, same review): a failing check the classifier
+// cannot attribute to a name must keep the head code-fixable, even sitting
+// beside a named external failure — {unnamed: failing, cla: failing} must not
+// read as "all failing checks are external".
+func TestWaitForChecks_UnattributableFailingCheckStaysFixable(t *testing.T) {
+	origInterval, origGrace := deployCheckInterval, deployExternalCheckGrace
+	deployCheckInterval, deployExternalCheckGrace = time.Millisecond, time.Millisecond
+	t.Cleanup(func() { deployCheckInterval, deployExternalCheckGrace = origInterval, origGrace })
+
+	p := &fakeDeployer{
+		checks: []forge.ChecksState{forge.ChecksFailing},
+		prState: &forge.PullRequestState{Checks: []forge.CheckResult{
+			{Name: "", Conclusion: forge.ChecksFailing},
+			{Name: "cla", Conclusion: forge.ChecksFailing},
+		}},
+	}
+	deps := newDeps(&fakeCommenter{}, &fakeLauncher{}, p)
+	err := deps.waitForChecks(context.Background(), PRResult{Number: 40, URL: "https://example/pr/40"}, "")
+	require.Error(t, err)
+	assert.True(t, ciFailureFixable(err),
+		"an unattributable failing check must keep the head code-fixable, per the unknown-stays-fixable rule")
+}
+
 // checkIsExternal matches exactly, by either signal, and nothing else.
 func TestCheckIsExternal(t *testing.T) {
 	assert.True(t, checkIsExternal(forge.CheckResult{Name: "cla"}))

@@ -83,53 +83,87 @@ func checkIsExternal(c forge.CheckResult) bool {
 // could not, each comma-joined for the headline.
 //
 // Best-effort in exactly the sense checkNames is (the SC-1996 rule): a read
-// failure or an empty list yields two empty strings, which the caller reads as
+// failure or an empty list yields empty/false, which the caller reads as
 // "cannot attribute this red" and treats as code-fixable. It reads on its own
 // short-lived context rather than the gate's, so a deploy window closing at this
 // instant cannot degrade an external red into a fixable one — the classification
 // must not depend on the clock that is expiring (SC-5395's class).
-func (d BoardTransitionDeps) failingChecksByKind(number int) (fixable, external string) {
+//
+// pendingCode reports a check a code change COULD turn green that has not yet
+// concluded (ChecksPending). combineChecks (internal/forge/github/client.go)
+// reports the aggregate ChecksFailing on the FIRST failing check without
+// waiting for the others to answer, so redHeadVerdict can be asked for a
+// verdict while build/test are still running beside an already-concluded
+// external red (SC-5843 r1) — the caller must not judge that head "external
+// only" while a check that might still turn green has not finished.
+//
+// unattributed reports a failing check this cannot name (an empty Name):
+// dropping it from BOTH buckets read "every failing check is external" for a
+// head that also has an unnamed break, so it is tracked instead and forces the
+// code-fixable path — unknown must never be the thing that silences a build
+// break (SC-5843 r1, non-blocking).
+func (d BoardTransitionDeps) failingChecksByKind(number int) (fixable, external string, pendingCode, unattributed bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	state, err := d.Deployer.ReadPullRequest(ctx, d.WorkspaceDir, number)
 	if err != nil || state == nil {
-		return "", ""
+		return "", "", false, false
 	}
 	var fix, ext []string
 	for _, c := range state.Checks {
-		if c.Conclusion != forge.ChecksFailing || c.Name == "" {
-			continue
+		switch c.Conclusion {
+		case forge.ChecksPending:
+			if !checkIsExternal(c) {
+				pendingCode = true
+			}
+		case forge.ChecksFailing:
+			if c.Name == "" {
+				unattributed = true
+				continue
+			}
+			if checkIsExternal(c) {
+				ext = append(ext, c.Name)
+				continue
+			}
+			fix = append(fix, c.Name)
 		}
-		if checkIsExternal(c) {
-			ext = append(ext, c.Name)
-			continue
-		}
-		fix = append(fix, c.Name)
 	}
-	return strings.Join(fix, ", "), strings.Join(ext, ", ")
+	return strings.Join(fix, ", "), strings.Join(ext, ", "), pendingCode, unattributed
 }
 
 // redHeadVerdict says what a red head means for the CI gate.
 //
-//   - Any failing check a code change could turn green — or a red this cannot
-//     attribute at all — is today's fixable "CI checks failed", carrying ONLY
-//     the code-fixable names: a fixer told to fix a signature check looks for a
-//     defect that is not in the branch.
-//   - Every failing check external, within the grace: nil, the caller's signal
-//     to keep polling. The check will very likely re-run.
-//   - Every failing check external, past the grace: the non-fixable error,
-//     tagged so ciFailureFixable declines it and ciFailureHeadline names the
-//     checks and the real remedy.
+//   - Any failing check a code change could turn green — an unattributed
+//     failing check — or a red this cannot attribute at all — is today's
+//     fixable "CI checks failed", carrying ONLY the code-fixable names: a
+//     fixer told to fix a signature check looks for a defect that is not in
+//     the branch.
+//   - Every OTHER failing check external, but a check a code change could
+//     still turn green has not concluded yet: nil, the caller's signal to keep
+//     polling. The aggregate reds on the first failing check without waiting
+//     for the others (SC-5843 r1) — this must not judge the head before they
+//     answer, however long the external grace has run.
+//   - Every failing check external, none still pending, within the grace: nil,
+//     the caller's signal to keep polling. The check will very likely re-run.
+//   - Every failing check external, none still pending, past the grace: the
+//     non-fixable error, tagged so ciFailureFixable declines it and
+//     ciFailureHeadline names the checks and the real remedy.
 //
 // polls and wantHead are for the log only, so the gate's existing "CI checks
 // failed" line keeps saying which poll and which head it judged.
 func (d BoardTransitionDeps) redHeadVerdict(res PRResult, polls int, wantHead string, graceElapsed bool) error {
-	fixable, external := d.failingChecksByKind(res.Number)
-	if fixable != "" || external == "" {
+	fixable, external, pendingCode, unattributed := d.failingChecksByKind(res.Number)
+	if fixable != "" || external == "" || unattributed {
 		d.Logger.Info().Int("pr", res.Number).Int("polls", polls).Str("head", wantHead).
 			Str("failing", fixable).Msg("deploy: CI checks failed")
 		return errors.WithDetails("CI checks failed", "pr", res.URL,
 			deployFailingChecksDetail, fixable)
+	}
+	if pendingCode {
+		d.Logger.Info().Int("pr", res.Number).Int("polls", polls).Str("head", wantHead).
+			Str("external", external).
+			Msg("deploy: red only on checks no code change can turn green so far, but another check has not concluded; waiting for it")
+		return nil
 	}
 	if !graceElapsed {
 		d.Logger.Info().Int("pr", res.Number).Str("external", external).
