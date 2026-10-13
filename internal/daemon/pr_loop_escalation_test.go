@@ -62,6 +62,12 @@ func TestPREscalation_unclassifiableVerdictIsNotReportedAsMissing(t *testing.T) 
 // never THE message a card-facing marker shows; the ordinary stage-failure
 // evidence path is where a diagnosis like this belongs, not the PR-loop
 // handover.
+//
+// SC-5554: an Agent-carrying exit with nothing recorded is now a CONFIRMED dead
+// step (AD3), so below its round budget the loop re-runs it instead of
+// escalating — this exact shape reaches escalation only once the budget is
+// spent, via deadStepReason. That function ignores diagnose exactly as
+// unrecordedStepReason always did, so the raw-diagnosis guarantee still holds.
 func TestPREscalation_unrecordedStepReasonIsHouseStyleNotRawDiagnosis(t *testing.T) {
 	diagnose := func(agentName, errorType string) FailureDiagnosis {
 		assert.Equal(t, "board-SC-1-prreview", agentName)
@@ -69,7 +75,7 @@ func TestPREscalation_unrecordedStepReasonIsHouseStyleNotRawDiagnosis(t *testing
 		return FailureDiagnosis{Headline: "the container ran out of memory", Detail: "killed at 4.0GiB"}
 	}
 
-	body := escalationBody(t, PRLoopOutcome{
+	body := escalationBodyAfterRounds(t, DefaultPRReviewRounds, PRLoopOutcome{
 		ReviewRecorded: false,
 		Agent:          "board-SC-1-prreview",
 		ErrorType:      "oom",
@@ -78,6 +84,7 @@ func TestPREscalation_unrecordedStepReasonIsHouseStyleNotRawDiagnosis(t *testing
 	assert.NotContains(t, body, "the container ran out of memory", "a raw diagnosis headline is never THE message")
 	assert.NotContains(t, body, "killed at 4.0GiB", "a raw diagnosis detail is never THE message")
 	assert.Contains(t, body, "PR reviewer")
+	assert.Contains(t, body, "died before recording a verdict")
 	assert.Contains(t, body, "re-run Deploy", "the escalation names the next action")
 }
 
@@ -95,13 +102,16 @@ func TestPREscalation_reDriveWithoutAnAgentStillExplainsItself(t *testing.T) {
 }
 
 // An empty-handed diagnoser must not blank the marker: the fallback line still
-// names what was missing.
+// names what was missing. No Agent: an agent-carrying exit with nothing
+// recorded is now a confirmed dead step (SC-5554) that relaunches below its
+// round budget rather than reaching this message at all — see
+// TestPREscalation_unrecordedStepReasonIsHouseStyleNotRawDiagnosis for that
+// shape. This one stays the agent-less re-drive unrecordedStepReason covers.
 func TestPREscalation_emptyDiagnosisFallsBackToTheMissingOutcome(t *testing.T) {
 	diagnose := func(string, string) FailureDiagnosis { return FailureDiagnosis{} }
 
 	body := escalationBody(t, PRLoopOutcome{
 		ReviewRecorded: false,
-		Agent:          "board-SC-1-prreview",
 	}, diagnose)
 
 	assert.Contains(t, body, "stopped before recording a verdict")

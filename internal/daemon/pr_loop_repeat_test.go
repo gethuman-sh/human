@@ -177,9 +177,11 @@ func TestAdvancePRLoop_sameFindingTwiceEscalatesAndNamesIt(t *testing.T) {
 // The production shape blocking-3 describes: a FIX-stage drive still carries
 // the last review's ReviewFinding (advancePRLoopFunc reads it unconditionally
 // off stage.pr-review, and it is the very value that launched this fixer), so
-// naively comparing it here would ALWAYS read as repeated. A fixer that
-// crashed with no recorded exit must escalate on that — not on a finding the
-// loop never re-reviewed.
+// naively comparing it here would ALWAYS read as repeated. FindingRepeated is
+// computed only at the review stage (AdvancePRLoop), so it plays no part here
+// either way — but SC-5554 changed what a crashed fixer's exit now does: the
+// fixer's agent is confirmed gone with nothing recorded, which below its round
+// budget is a dead step that RE-RUNS the fix round rather than escalating.
 func TestAdvancePRLoop_fixStageNeverReadsFindingAsRepeated(t *testing.T) {
 	base := time.Now().Add(-time.Hour)
 	finding := FindingFingerprint("BLOCKING internal/daemon/x.go:10 — the guard fires only in round 1 — still not fixed")
@@ -196,10 +198,44 @@ func TestAdvancePRLoop_fixStageNeverReadsFindingAsRepeated(t *testing.T) {
 	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1",
 		PRLoopOutcome{ReviewFinding: finding, FixRecorded: false, Agent: "board-SC-1-prfix"}))
 
+	_, failed := posted(c, PRReviewFailedHeader)
+	assert.False(t, failed, "a dead fixer below its round budget re-runs rather than escalating (SC-5554)")
+	assert.Equal(t, 1, l.calls)
+	assert.Equal(t, "/human-pr-fix SC-1 --pr=7 --branch=feat/x", l.prompt)
+	refixed, ok := posted(c, PRFixStartedHeader)
+	require.True(t, ok, "the relaunch charges a fresh pr-fix-started round")
+	assert.Contains(t, refixed, "finding: "+finding,
+		"the re-dispatch carries forward the SAME finding the dead round was sent")
+}
+
+// The fix-stage sibling of the escalation test above: once the fix step's own
+// charged round count reaches the budget, the same dead fixer reds the card
+// instead of re-running — and the reason names the death, never a repeated
+// finding the loop never actually re-reviewed.
+func TestAdvancePRLoop_deadFixerAtItsOwnBudgetEscalatesWithoutClaimingRepeat(t *testing.T) {
+	base := time.Now().Add(-time.Hour)
+	finding := FindingFingerprint("BLOCKING internal/daemon/x.go:10 — the guard fires only in round 1 — still not fixed")
+	comments := []tracker.Comment{
+		{Body: "[human:ready-for-review]\nbranch: feat/x", ID: "0", Created: base},
+		{Body: "[human:pr-review-started]\npr: u\nnumber: 7\nbranch: feat/x", ID: "1", Created: base.Add(time.Second)},
+	}
+	for i := 0; i < DefaultPRReviewRounds; i++ {
+		comments = append(comments, tracker.Comment{
+			Body: prFixStartedBody(finding, ""), ID: fmt.Sprintf("fix-%d", i), Created: base.Add(time.Duration(2+i) * time.Second),
+		})
+	}
+	c := &fakeCommenter{comments: comments}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+
+	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1",
+		PRLoopOutcome{ReviewFinding: finding, FixRecorded: false, Agent: "board-SC-1-prfix"}))
+
 	failed, ok := posted(c, PRReviewFailedHeader)
-	require.True(t, ok, "an unrecorded fix-stage exit still escalates")
+	require.True(t, ok, "the fix step's own round budget is spent")
+	assert.Zero(t, l.calls, "no further relaunch once the budget is spent")
 	assert.NotContains(t, failed, "same blocking problem twice",
 		"the finding the fixer was JUST sent must never read back as a repeat of itself")
-	assert.Contains(t, failed, "stopped before recording",
-		"the real cause — no exit recorded — must be the one named")
+	assert.Contains(t, failed, "died before recording an exit",
+		"the real cause — the fixer died, its re-runs spent — must be the one named")
 }

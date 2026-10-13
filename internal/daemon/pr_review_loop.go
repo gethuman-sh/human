@@ -32,6 +32,9 @@ import (
 // round found a new, real problem, and a count of three turned five of those
 // rounds into a person's turn (SC-5174). Eight bounds the cost when findings
 // keep changing; it should be rare for a loop to reach it without repeating.
+// It also bounds the dead-step relaunch (SC-5554): each step is checked
+// against its OWN charged round count (chargedPRReviewRounds for the review
+// step, chargedPRFixRounds for the fix step).
 const DefaultPRReviewRounds = 8
 
 // MaxSoleDirectionPursuits bounds a DIFFERENT loop that happens to key off the
@@ -81,6 +84,17 @@ const (
 	// charged, and reconcileOutage re-drives the loop when the substrate returns
 	// (SC-2307's rule, which reached this loop only in SC-5627).
 	PRActionOutage
+	// PRActionRelaunch re-runs the step the thread names, for the round it names.
+	// It is the answer to a write that is NEVER COMING: the step's record is
+	// missing or from an earlier round AND its agent is confirmed gone, so there
+	// is no outcome to read and nothing about the work is known to be wrong. The
+	// loop had no such move — every unreadable step escalated — so a reviewer the
+	// zombie sweep reaped after a daemon restart redded a green, mergeable PR
+	// that every other board stage would simply have re-run (SC-5554). Bounded by
+	// the step's own charged round count against DefaultPRReviewRounds; a record
+	// that IS this round's and cannot be decoded still escalates, because that
+	// step decided something rather than dying.
+	PRActionRelaunch
 )
 
 // NextPRLoopAction is the loop's transition function. `stage` is the step that
@@ -471,6 +485,27 @@ func chargedPRReviewRounds(comments []tracker.Comment) int {
 	return roundsNetOfOutage(comments, PRReviewStartedHeader)
 }
 
+// chargedPRFixRounds is chargedPRReviewRounds' sibling for the fix step: fix
+// rounds dispatched, minus every one a done-stage outage interrupted.
+//
+// It exists because the review counter does not move for a fix round. Bounding a
+// dead FIXER's relaunch by chargedPRReviewRounds — which counts
+// pr-review-started markers only — would be a bound that never advances: a fixer
+// crashing before it records would be relaunched forever (SC-5554). Same walk as
+// the other two bounds, so an outage refunds a fix round exactly as it refunds a
+// review round and a deploy-fix round (SC-2307/SC-5592/SC-5627).
+func chargedPRFixRounds(comments []tracker.Comment) int {
+	return roundsNetOfOutage(comments, PRFixStartedHeader)
+}
+
+// chargedStepRounds is the count the relaunch bound reads for the step in hand.
+func chargedStepRounds(comments []tracker.Comment, stage PRLoopStage) int {
+	if stage == PRStageFix {
+		return chargedPRFixRounds(comments)
+	}
+	return chargedPRReviewRounds(comments)
+}
+
 // PRLoopOutcome is what the loop step that just finished left behind: the
 // reviewer's verdict and exit, or the fixer's exit, plus whether either was
 // RECORDED AT ALL. That last distinction is the point of the type. An agent
@@ -532,14 +567,31 @@ type PRLoopOutcome struct {
 	// a slug the fixer never saw twice.
 	ClassRepeated bool
 	// ReviewStale/FixStale report that the corresponding record above was NOT
-	// confirmed to be this round's own write — the cmd-layer reader raced ahead
-	// of the reviewer/fixer's final write and, after its bounded settle backoff,
+	// confirmed to be this round's own write — the cmd-layer reader raced ahead of
+	// the reviewer/fixer's final write and, after its bounded settle backoff,
 	// still could not tell whether it was reading this step's outcome or the
-	// previous round's leftover. A stale record must never be acted on: the loop
-	// escalates instead of trusting a verdict/exit it cannot confirm is current
-	// (SC-2378).
+	// previous round's leftover. Such a record must never be ACTED on (SC-2378).
+	// What the loop does instead depends on StepDead: a write still coming
+	// escalates, a write that is never coming re-runs the round (SC-5554).
 	ReviewStale bool
 	FixStale    bool
+	// ReviewUnreadable/FixUnreadable report the third state: the record found WAS
+	// this round's own write and could not be decoded. The step decided something
+	// the daemon cannot read, which is a different failure from a step that never
+	// reported — it escalates immediately and is never re-run, because re-running
+	// a step that reports the same undecodable thing spends the whole budget on a
+	// sentence nobody can read (SC-5554). Never acted on either: json.Unmarshal
+	// populates fields up to the error, so the value may be half a record.
+	ReviewUnreadable bool
+	FixUnreadable    bool
+	// StepDead reports that the agent of the step LatestPRLoopStage names is
+	// confirmed gone — its exit event drove this evaluation, or the re-drive's
+	// liveness probe found it absent from this machine's listing. Set by the
+	// executor (loopStepLiveness), and only when the step's own record is missing
+	// or unconfirmable: a fresh record needs no death to explain it. False is the
+	// honest default — a host with no probe wired, or a listing that errored,
+	// never claims a death it cannot see.
+	StepDead bool
 }
 
 // headStalled reports the convergence-guard condition: the fixer finished but the
@@ -579,6 +631,28 @@ func (o PRLoopOutcome) stepStale(stage PRLoopStage) bool {
 	}
 }
 
+// stepUnreadable reports whether THIS round's own record was found and could not
+// be decoded — see ReviewUnreadable/FixUnreadable. PRStageNone has no step
+// behind it, so there is nothing to have failed to read.
+func (o PRLoopOutcome) stepUnreadable(stage PRLoopStage) bool {
+	switch stage {
+	case PRStageReview:
+		return o.ReviewUnreadable
+	case PRStageFix:
+		return o.FixUnreadable
+	default:
+		return false
+	}
+}
+
+// stepMissing reports that the just-finished step left no outcome this round:
+// nothing recorded at all, or a record that is not this round's. The two are
+// different failures for the MESSAGE (unrecordedStepReason vs staleStepReason)
+// and the same one for the DECISION — there is nothing to act on either way.
+func (o PRLoopOutcome) stepMissing(stage PRLoopStage) bool {
+	return !o.stepRecorded(stage) || o.stepStale(stage)
+}
+
 // outageReason is the one line the step that just finished offered about what it
 // could not reach — the card's face. Empty falls back to pausedOutageMarker's
 // generic phrase rather than inventing one.
@@ -602,15 +676,17 @@ func (o PRLoopOutcome) outageReason(stage PRLoopStage) string {
 // tested without a daemon; the caller executes the action (launch an agent,
 // mark-ready + merge, or red the card).
 //
-// On top of the pure transition it enforces two further rules, checked in
-// order.
+// On top of the pure transition it enforces further rules, checked in order.
 //
-// First, staleness (SC-2378): the loop never acts on a step's outcome until
-// that step's own record is the one being read. If the just-finished step's
-// record could not be confirmed as THIS round's write — the cmd-layer reader
-// raced ahead of the reviewer/fixer's final write — it escalates immediately,
-// before the outcome is even looked at, rather than risk treating a
-// superseded verdict/exit as current.
+// First, a three-way split on the just-finished step's own record (SC-5554,
+// SC-2378). A record that IS this round's and cannot be decoded escalates at
+// once — the step decided something the daemon cannot read, and re-running it
+// would spend the budget on the same unreadable sentence. A record that is
+// missing or from an earlier round is read together with StepDead: if the
+// step's agent is confirmed gone, the write is never coming and the round is
+// re-run (PRActionRelaunch) within the step's own charged bound; otherwise the
+// write may still be in flight and the loop escalates rather than risk acting
+// on a superseded verdict/exit.
 //
 // Second, the convergence guard: a fix that finished `done` but left the
 // branch tip on the SAME SHA the preceding review read (headStalled) means
@@ -626,7 +702,20 @@ func (o PRLoopOutcome) outageReason(stage PRLoopStage) string {
 // (SC-5627).
 func EvaluatePRLoop(comments []tracker.Comment, outcome PRLoopOutcome) PRLoopAction {
 	stage := LatestPRLoopStage(comments)
-	if outcome.stepStale(stage) {
+	// This round's own record, undecodable: the step decided something the daemon
+	// cannot read. Escalate before anything else and never re-run it (SC-5554).
+	if outcome.stepUnreadable(stage) {
+		return PRActionEscalate
+	}
+	// No outcome for this round. Whether that is a write still in flight or a
+	// write that is never coming is the whole question: the settle backoff covers
+	// the first (SC-2378), and a step whose agent is confirmed gone is the second
+	// — re-run the round, within the step's own charged budget, instead of redding
+	// a deploy nothing judged (SC-5554).
+	if outcome.stepMissing(stage) {
+		if outcome.StepDead && chargedStepRounds(comments, stage) < DefaultPRReviewRounds {
+			return PRActionRelaunch
+		}
 		return PRActionEscalate
 	}
 	var step string

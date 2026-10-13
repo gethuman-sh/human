@@ -43,22 +43,22 @@ func TestReadPRReviewVerdict_readsField(t *testing.T) {
 	isolateState(t)
 	writeRawReport(t, "SC-1", "stage.pr-review", `{"verdict":"approved","blocking":0,"head":"abc123","summary":"clean"}`)
 
-	verdict, head, _, _, _, recorded, fresh := readPRReviewVerdict(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
+	verdict, head, _, _, _, read := readPRReviewVerdict(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
 	assert.Equal(t, "approved", verdict)
 	assert.Equal(t, "abc123", head, "the reviewed head feeds the convergence guard")
-	assert.True(t, recorded)
-	assert.True(t, fresh, "a zero notBefore has no round to anchor on, so any record found is fresh")
+	assert.True(t, read.recorded)
+	assert.True(t, read.fresh, "a zero notBefore has no round to anchor on, so any record found is fresh")
 }
 
 // A missing report is not an error the loop can act on — it reads as "".
 func TestReadPRReviewVerdict_missingIsEmpty(t *testing.T) {
 	isolateState(t)
 	shrinkPRLoopReadBackoff(t)
-	verdict, head, _, _, _, recorded, fresh := readPRReviewVerdict(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
+	verdict, head, _, _, _, read := readPRReviewVerdict(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
 	assert.Equal(t, "", verdict)
 	assert.Equal(t, "", head)
-	assert.False(t, recorded, "absence must be distinguishable from an empty verdict")
-	assert.False(t, fresh)
+	assert.False(t, read.recorded, "absence must be distinguishable from an empty verdict")
+	assert.False(t, read.fresh)
 }
 
 // A reviewer that could not reach the substrate records the exit contract's
@@ -68,12 +68,12 @@ func TestReadPRReviewVerdict_readsTheOutageExitAndSummary(t *testing.T) {
 	isolateState(t)
 	writeRawReport(t, "SC-1", "stage.pr-review", `{"exit":"outage","summary":"the tracker API was unreachable"}`)
 
-	verdict, _, _, exit, summary, recorded, fresh := readPRReviewVerdict(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
+	verdict, _, _, exit, summary, read := readPRReviewVerdict(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
 	assert.Empty(t, verdict, "an outage records no verdict")
 	assert.Equal(t, string(daemon.ExitOutage), exit)
 	assert.Equal(t, "the tracker API was unreachable", summary, "the card's face names what was unreachable")
-	assert.True(t, recorded)
-	assert.True(t, fresh)
+	assert.True(t, read.recorded)
+	assert.True(t, read.fresh)
 }
 
 // deferred is the findings note the options block leads with; an outage deferred
@@ -83,7 +83,7 @@ func TestReadPRFixReport_outageLineIsTheSummaryNotTheDeferred(t *testing.T) {
 	writeRawReport(t, "SC-1", "stage.pr-fix",
 		`{"exit":"outage","deferred":"nothing addressed","summary":"the model API was unreachable"}`)
 
-	exit, _, summary, _, _, _ := readPRFixReport(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
+	exit, _, summary, _, _ := readPRFixReport(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
 	assert.Equal(t, string(daemon.ExitOutage), exit)
 	assert.Equal(t, "the model API was unreachable", summary)
 }
@@ -92,7 +92,7 @@ func TestReadPRFixReport_readsField(t *testing.T) {
 	isolateState(t)
 	writeRawReport(t, "SC-1", "stage.pr-fix", `{"exit":"done","head":"def456"}`)
 
-	exit, options, summary, head, _, _ := readPRFixReport(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
+	exit, options, summary, head, _ := readPRFixReport(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
 	assert.Equal(t, "done", exit)
 	assert.Empty(t, options)
 	assert.Empty(t, summary)
@@ -103,7 +103,7 @@ func TestReadPRFixReport_needsInput(t *testing.T) {
 	isolateState(t)
 	writeRawReport(t, "SC-1", "stage.pr-fix", `{"exit":"needs-input"}`)
 
-	exit, _, _, _, _, _ := readPRFixReport(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
+	exit, _, _, _, _ := readPRFixReport(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
 	assert.Equal(t, "needs-input", exit)
 }
 
@@ -114,7 +114,7 @@ func TestReadPRFixReport_optionsAndDeferredContext(t *testing.T) {
 	writeRawReport(t, "SC-1", "stage.pr-fix",
 		`{"exit":"needs-input","options":[{"id":"1","label":"A"},{"id":"2","label":"B"}],"deferred":"blocked on X","summary":"one line"}`)
 
-	exit, options, summary, _, _, _ := readPRFixReport(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
+	exit, options, summary, _, _ := readPRFixReport(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
 	assert.Equal(t, "needs-input", exit)
 	require.Len(t, options, 2)
 	assert.Equal(t, "A", options[0].Label)
@@ -128,7 +128,7 @@ func TestReadPRFixReport_summaryContextFallback(t *testing.T) {
 	isolateState(t)
 	writeRawReport(t, "SC-1", "stage.pr-fix", `{"exit":"needs-input","summary":"one line"}`)
 
-	_, _, summary, _, _, _ := readPRFixReport(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
+	_, _, summary, _, _ := readPRFixReport(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
 	assert.Equal(t, "one line", summary)
 }
 
@@ -154,11 +154,11 @@ func TestReadPRReviewVerdict_waitsForFreshVerdict(t *testing.T) {
 		close(written)
 	}()
 
-	verdict, head, _, _, _, recorded, fresh := readPRReviewVerdict(context.Background(), "", "SC-1", anchor, zerolog.Nop())
+	verdict, head, _, _, _, read := readPRReviewVerdict(context.Background(), "", "SC-1", anchor, zerolog.Nop())
 	<-written
 
-	assert.True(t, recorded, "the settle backoff must pick up the delayed write")
-	assert.True(t, fresh, "a write timestamped after the anchor is this round's own")
+	assert.True(t, read.recorded, "the settle backoff must pick up the delayed write")
+	assert.True(t, read.fresh, "a write timestamped after the anchor is this round's own")
 	assert.Equal(t, "approved", verdict)
 	assert.Equal(t, "abc123", head)
 }
@@ -173,15 +173,34 @@ func TestReadPRReviewVerdict_staleOnly_notFresh(t *testing.T) {
 	writeRawReport(t, "SC-1", "stage.pr-review", `{"verdict":"changes-requested","head":"abc123"}`)
 	anchor := time.Now().Add(time.Hour) // anchor is "in the future" relative to the write above
 
-	verdict, _, _, _, _, recorded, fresh := readPRReviewVerdict(context.Background(), "", "SC-1", anchor, zerolog.Nop())
+	verdict, _, _, _, _, read := readPRReviewVerdict(context.Background(), "", "SC-1", anchor, zerolog.Nop())
 
-	assert.True(t, recorded, "a stale record was still found")
-	assert.False(t, fresh, "a record older than the round's own anchor is never fresh")
+	assert.True(t, read.recorded, "a stale record was still found")
+	assert.False(t, read.fresh, "a record older than the round's own anchor is never fresh")
+	assert.True(t, read.stale(), "recorded, not fresh, not a failed decode of this round's own write")
 	// The verdict is deliberately left unpopulated on a stale read — never
 	// exposing a superseded value is what keeps a forgetful caller from acting
 	// on it by accident; `recorded && !fresh` is what the caller (daemon.go)
 	// wires through to PRLoopOutcome.ReviewStale.
 	assert.Empty(t, verdict, "a stale record's fields are never populated")
+}
+
+// A record that IS this round's own write and will not decode is a THIRD
+// state, distinct from stale (SC-5554): the step reported something the
+// daemon cannot read, rather than never having written at all.
+func TestReadStageReportSettled_freshButUndecodableIsUnreadableNotStale(t *testing.T) {
+	isolateState(t)
+	writeRawReport(t, "SC-1", "stage.pr-review", `{"verdict":5}`)
+
+	var v struct {
+		Verdict string `json:"verdict"`
+	}
+	read := readStageReportSettled(context.Background(), "", "SC-1", "stage.pr-review", time.Time{}, &v, zerolog.Nop())
+
+	assert.True(t, read.recorded)
+	assert.True(t, read.unreadable)
+	assert.False(t, read.fresh)
+	assert.False(t, read.stale(), "an undecodable write of THIS round is not the same failure as a prior round's leftover")
 }
 
 func TestReadDeployFixReport_readsField(t *testing.T) {
@@ -216,14 +235,56 @@ func TestReadDeployFixReport_readsTheSummary(t *testing.T) {
 	assert.Equal(t, "the git remote was unreachable", report.Summary)
 }
 
-// A missing deploy-fix report reads as "" — the driver treats a non-done exit,
-// including absence, as red.
-func TestReadDeployFixReport_missingIsEmpty(t *testing.T) {
+// A missing deploy-fix report reads as "" with Unconfirmed true — the driver
+// re-runs the round rather than redding it (SC-5554). A record older than the
+// round's own anchor (a previous dispatch's leftover) is the same case: this
+// round confirmed nothing. An undecodable record that IS this round's own
+// write is NOT unconfirmed — that fixer reported — so it falls through to red.
+func TestReadDeployFixReport_missingIsUnconfirmed(t *testing.T) {
 	isolateState(t)
 	shrinkPRLoopReadBackoff(t)
 
 	report := readDeployFixReport(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
 	assert.Empty(t, report.Exit)
+	assert.True(t, report.Unconfirmed, "nothing recorded at all is unconfirmed")
+}
+
+func TestReadDeployFixReport_staleRecordIsUnconfirmed(t *testing.T) {
+	isolateState(t)
+	shrinkPRLoopReadBackoff(t)
+	writeRawReport(t, "SC-1", "stage.deploy-fix", `{"exit":"needs-input"}`)
+	anchor := time.Now().Add(time.Hour) // anchor is "in the future" relative to the write above
+
+	report := readDeployFixReport(context.Background(), "", "SC-1", anchor, zerolog.Nop())
+	assert.Empty(t, report.Exit, "a stale record's fields are never populated")
+	assert.True(t, report.Unconfirmed, "a record from an earlier dispatch confirms nothing about THIS round")
+}
+
+func TestReadDeployFixReport_undecodableFreshRecordIsNotUnconfirmed(t *testing.T) {
+	isolateState(t)
+	writeRawReport(t, "SC-1", "stage.deploy-fix", `{"exit":5}`)
+
+	report := readDeployFixReport(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
+	assert.False(t, report.Unconfirmed, "this round's own write, undecodable, is a step that reported — not a dead one")
+}
+
+// SC-5554 review note 1: json.Unmarshal does not stop at the first type
+// error — it keeps decoding the fields that follow and returns the error only
+// once the whole object is consumed. "exit" appears before "blocker" in this
+// record, so it decodes to "done" before "blocker" (a string, not the object
+// Blocker.UnmarshalJSON expects) fails. A reader that passed that half-decoded
+// Exit through would hand AdvanceDeployFix's done arm a record the daemon
+// never actually confirmed, which would publish the branch and re-run the
+// deploy on it. The reader must zero every field of an undecodable record
+// instead, so it falls through to the generic red exactly like any other
+// recorded-but-unusable exit (TestReadDeployFixReport_undecodableFreshRecordIsNotUnconfirmed).
+func TestReadDeployFixReport_undecodableRecordExposesNoHalfDecodedExit(t *testing.T) {
+	isolateState(t)
+	writeRawReport(t, "SC-1", "stage.deploy-fix", `{"exit":"done","blocker":"oops"}`)
+
+	report := readDeployFixReport(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
+	assert.Empty(t, report.Exit, "an undecodable record must not hand a half-decoded exit through")
+	assert.False(t, report.Unconfirmed, "this round's own write, undecodable, is a step that reported — not a dead one")
 }
 
 // ctx cancellation mid-backoff must return promptly rather than block for the

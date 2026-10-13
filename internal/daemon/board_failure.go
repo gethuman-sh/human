@@ -809,19 +809,26 @@ func drivePRLoopExit(exit RunExit, deps FailureDeps) bool {
 // at AdvanceDeployFix (PublishResolvedBranch), so waiving the protection on an
 // error the run then recovers from is how that resolution would be lost.
 //
-// A fixer that genuinely dies here is not silently lost, but it is not a free
-// retry either: reconcilePRLoops re-drives only a card whose newest done-stage
-// marker is pr-review-started or pr-fix-started (doneStageLoopActive ->
+// A fixer whose exit event reaches THIS driver and recorded nothing for its
+// round is re-dispatched within DefaultDeployFixRounds
+// (AdvanceDeployFix -> relaunchDeadDeployFixer, SC-5554) rather than left to a
+// slower recovery: this driver has the fact a dead step needs — the exit event
+// itself is the confirmation the fixer is gone — so there is nothing to wait
+// on. reconcilePRLoops re-drives only a card whose newest done-stage marker is
+// pr-review-started or pr-fix-started (doneStageLoopActive ->
 // doneStageLoopHalf, board_reconcile.go:392-411, gated at :601) — once
 // deploy-fix-started is the newest marker no reconcile pass calls
 // AdvanceDeployFix (its only call sites are :831 below and
 // cmd/cmddaemon/daemon.go's live exit path). SC-5591's three-name join
 // (liveStageAgent) is a stand-down guard against double-dispatch, not an
 // ownership claim over deploy-fix cards; the FSM doc's deploy-fixing.note says
-// the same. The actual recovery is reconcileStuckRunning: after
+// the same. reconcileStuckRunning's delayed, CHARGED red — after
 // StuckRunningGrace it posts [human:deploy-failed] and charges the stage's
-// retry budget (stuckCardIsOursToRed/stuckCardLivenessVerdict) — a delayed,
-// CHARGED red, not an uncharged re-drive.
+// retry budget (stuckCardIsOursToRed/stuckCardLivenessVerdict) — remains the
+// recovery only for a death whose EXIT EVENT ITSELF is lost (a daemon restart,
+// a dropped event): report.Unconfirmed is never claimed from a listing this
+// host could not read, so a genuinely silent death still waits on the grace
+// period rather than being guessed at here.
 func driveDeployFixExit(exit RunExit, deps FailureDeps) bool {
 	if exit.Stage != deployFixAgentStage {
 		return false

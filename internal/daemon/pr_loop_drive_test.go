@@ -225,24 +225,34 @@ func TestAdvancePRLoop_redriveStandsDownWhileTheStepsAgentIsAlive(t *testing.T) 
 		agent      string
 		fixStale   bool
 		escalates  bool
+		// relaunches: the fixer's agent is confirmed gone (either the liveness
+		// probe found it absent, or the drive IS its own exit event) and no
+		// record of its round exists — the loop re-runs the fix round instead of
+		// escalating (SC-5554), in place of what used to be an escalation here.
+		relaunches bool
 		asked      []string
 	}{
-		{"re-drive, fixer alive", []string{"board-SC-1-prfix"}, "", false, false, []string{"board-SC-1-prfix"}},
-		{"re-drive, fixer gone", nil, "", false, true, []string{"board-SC-1-prfix", "board-SC-1-deployfix"}},
-		{"the fixer's own exit event", []string{"board-SC-1-prfix"}, "board-SC-1-prfix", false, true, nil},
+		{"re-drive, fixer alive", []string{"board-SC-1-prfix"}, "", false, false, false, []string{"board-SC-1-prfix"}},
+		// SC-5554: the fixer's agent is confirmed gone and it left no record of
+		// its round — a dead step, re-run rather than escalated.
+		{"re-drive, fixer gone", nil, "", false, false, true, []string{"board-SC-1-prfix", "board-SC-1-deployfix"}},
+		// SC-5554: the drive IS the fixer's own exit event (Agent set) and it
+		// recorded nothing — same dead-step relaunch, no probe asked at all.
+		{"the fixer's own exit event", []string{"board-SC-1-prfix"}, "board-SC-1-prfix", false, false, true, nil},
 		// A prior round's FixRecorded/FixStale leftover must not read as THIS
 		// round's step already having reported in: stepRecorded alone stays
 		// true forever once round 1 writes it, so from round 2 on only the
 		// staleness check tells a live fixer apart from a finished one (SC-5120).
-		{"re-drive, prior round's stale fix record, fixer alive", []string{"board-SC-1-prfix"}, "", true, false, []string{"board-SC-1-prfix"}},
+		{"re-drive, prior round's stale fix record, fixer alive", []string{"board-SC-1-prfix"}, "", true, false, false, []string{"board-SC-1-prfix"}},
 		// SC-5591: the done stage's third agent. No loop marker names it, so the
 		// half the thread names is gone while the card is still owned.
-		{"re-drive, only the deploy fixer alive", []string{"board-SC-1-deployfix"}, "", false, false, []string{"board-SC-1-prfix", "board-SC-1-deployfix"}},
+		{"re-drive, only the deploy fixer alive", []string{"board-SC-1-deployfix"}, "", false, false, false, []string{"board-SC-1-prfix", "board-SC-1-deployfix"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := &fakeCommenter{comments: thread}
+			l := &fakeLauncher{}
 			var asked []string
-			deps := newDeps(c, &fakeLauncher{}, &fakeDeployer{})
+			deps := newDeps(c, l, &fakeDeployer{})
 			deps.LoopStepAlive = func(name string) bool {
 				asked = append(asked, name)
 				return slices.Contains(tc.aliveNames, name)
@@ -257,6 +267,14 @@ func TestAdvancePRLoop_redriveStandsDownWhileTheStepsAgentIsAlive(t *testing.T) 
 			_, failed := posted(c, PRReviewFailedHeader)
 			assert.Equal(t, tc.escalates, failed)
 			assert.Equal(t, tc.asked, asked)
+			if tc.relaunches {
+				assert.Equal(t, 1, l.calls, "the dead fixer step is re-run once")
+				assert.Equal(t, "/human-pr-fix SC-1 --pr=7 --branch=feat/x", l.prompt)
+				_, refixed := posted(c, PRFixStartedHeader)
+				assert.True(t, refixed, "the relaunch charges a fresh pr-fix-started round")
+			} else {
+				assert.Zero(t, l.calls, "standing down or escalating launches nothing")
+			}
 		})
 	}
 }
@@ -287,4 +305,67 @@ func TestAdvancePRLoop_redriveDoesNotMergeOverALiveDeployFixer(t *testing.T) {
 	assert.False(t, failed, "and nothing failed")
 	assert.Equal(t, []string{"board-SC-1-deployfix"}, asked,
 		"an approved review's record short-circuits the half probe, so the deployfix probe must sit outside it")
+}
+
+// SC-5554: the incident, at the executor. A reviewer's own exit event (Agent
+// set) carrying no verdict for this round is a confirmed dead step — the round
+// is re-run rather than escalated.
+func TestAdvancePRLoop_deadReviewerReRunsTheRound(t *testing.T) {
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:pr-review-started]\npr: u\nnumber: 7\nbranch: feat/x", time.Unix(2, 0)),
+		cmt(PRFixStartedHeader, time.Unix(3, 0)),
+		cmt("[human:pr-review-started]\npr: u\nnumber: 7\nbranch: feat/x", time.Unix(4, 0)),
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+
+	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1",
+		PRLoopOutcome{ReviewRecorded: true, ReviewStale: true, Agent: "board-SC-1-prreview"}))
+
+	assert.Equal(t, 1, l.calls)
+	assert.Equal(t, "/human-pr-review SC-1 --pr=7 --branch=feat/x", l.prompt)
+	_, refreshed := posted(c, PRReviewStartedHeader)
+	assert.True(t, refreshed)
+	_, failed := posted(c, PRReviewFailedHeader)
+	assert.False(t, failed, "a dead step below its round budget re-runs, not escalates")
+}
+
+// The same dead reviewer once its OWN charged round count reaches the budget:
+// the card reds and names the death, not an unreadable outcome.
+func TestAdvancePRLoop_deadReviewerAtTheBudgetRedsNamingTheDeath(t *testing.T) {
+	comments := []tracker.Comment{{Body: "[human:ready-for-review]\nbranch: feat/x", ID: "0", Created: time.Unix(1, 0)}}
+	for i := 0; i < DefaultPRReviewRounds; i++ {
+		comments = append(comments, cmt("[human:pr-review-started]\npr: u\nnumber: 7\nbranch: feat/x", time.Unix(int64(2+i), 0)))
+	}
+	c := &fakeCommenter{comments: comments}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+
+	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1",
+		PRLoopOutcome{ReviewRecorded: true, ReviewStale: true, Agent: "board-SC-1-prreview"}))
+
+	assert.Zero(t, l.calls)
+	failed, ok := posted(c, PRReviewFailedHeader)
+	require.True(t, ok)
+	assert.Contains(t, failed, "died before recording a verdict")
+}
+
+// A record that IS this round's own write and cannot be decoded is not a dead
+// step: it reds at once regardless of the round count, and never re-runs.
+func TestAdvancePRLoop_unreadableVerdictRedsWithoutReRunning(t *testing.T) {
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:pr-review-started]\npr: u\nnumber: 7\nbranch: feat/x", time.Unix(2, 0)),
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+
+	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1",
+		PRLoopOutcome{ReviewRecorded: true, ReviewUnreadable: true, Agent: "board-SC-1-prreview"}))
+
+	assert.Zero(t, l.calls)
+	failed, ok := posted(c, PRReviewFailedHeader)
+	require.True(t, ok)
+	assert.Contains(t, failed, "could not read it")
 }
